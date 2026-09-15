@@ -1,0 +1,35 @@
+[package]
+name = "sabertooth"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["RAW Lab <github.com/raw-lab>"]
+description = "Sabertooth — a pure-Rust reimplementation of the MMseqs2 profile/PSSM sensitivity core"
+license = "MIT"
+
+[[bin]]
+name = "sabertooth"
+path = "src/main.rs"
+
+[lib]
+name = "sabertooth"
+path = "src/lib.rs"
+
+[dependencies]
+rayon = "=1.10.0"
+# Optional distributed backend (RAW-lab HydraMPP), vendored. Off by default so the
+# ordinary build stays dependency-light; enable with `--features distributed`.
+hydra-mpp-core = { path = "vendor/hydra-mpp-core", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = []
+# Distribute search across HydraMPP workers/nodes (also pulls in serde for the
+# task wire types). GPU-aware scheduling (`--gpus`) rides on this feature too.
+distributed = ["dep:hydra-mpp-core", "dep:serde"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
