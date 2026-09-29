@@ -6,6 +6,7 @@
 
 ![Rust](https://img.shields.io/badge/Rust-1.75%2B-black?logo=rust)
 ![Crates.io](https://img.shields.io/crates/v/sabertooth?logo=rust)
+![License](https://img.shields.io/badge/license-MIT-blue)
 ![Build](https://img.shields.io/github/actions/workflow/status/raw-lab/sabertooth/rust.yml?branch=main)
 ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-success)
 ![Single crate](https://img.shields.io/badge/single%20crate-cargo%20install-orange?logo=rust)
