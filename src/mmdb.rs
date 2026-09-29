@@ -17,12 +17,16 @@
 //! the same layout so an `mmseqs createdb` output is readable by Sabertooth.
 
 use crate::fasta::{Record, SeqDb};
+use crate::matrix::SubstitutionMatrix;
+use crate::profile::Profile;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
 pub const DBTYPE_AMINO_ACIDS: i32 = 0;
 pub const DBTYPE_NUCLEOTIDES: i32 = 1;
+/// Profile database (`mmseqs msa2profile` output). Entries are 25-byte columns.
+pub const DBTYPE_PROFILE: i32 = 2;
 pub const DBTYPE_GENERIC: i32 = 12; // header databases use this
 
 /// One entry of a `.index` file.
@@ -131,7 +135,15 @@ pub fn read_db(prefix: &Path, aa2num: &[u8; 256]) -> io::Result<SeqDb> {
     let pstr = prefix.to_string_lossy().to_string();
     let data = fs::read(&pstr)?;
     let dindex = parse_index(&fs::read_to_string(format!("{}.index", pstr))?);
-    let _dbtype = read_dbtype(Path::new(&format!("{}.dbtype", pstr)));
+    let dbtype = read_dbtype(Path::new(&format!("{}.dbtype", pstr)));
+    if dbtype == DBTYPE_PROFILE {
+        // Profile payloads are binary and legitimately contain 0x0A, so the
+        // text `\n\0` unframing below would silently corrupt them.
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "this is a profile DB (dbtype 2) — use read_profile_db, not read_db",
+        ));
+    }
 
     // headers are optional
     let hdata = fs::read(format!("{}_h", pstr)).ok();
@@ -185,6 +197,74 @@ pub fn read_db(prefix: &Path, aa2num: &[u8; 256]) -> io::Result<SeqDb> {
     })
 }
 
+/// Read an MMseqs2 **profile** database (`dbtype == 2`, e.g. the output of
+/// `mmseqs msa2profile`) into `(name, Profile)` pairs, in index order.
+///
+/// Profile entries are 25-byte columns terminated by a single `NUL`. Unlike text
+/// entries they are **not** `\n\0`-framed: the binary payload contains `0x0A`
+/// bytes as ordinary score/residue values, so only the trailing `NUL` is
+/// stripped. Decoding of each column is done by [`Profile::from_pssm_columns`].
+pub fn read_profile_db(
+    prefix: &Path,
+    mat: &SubstitutionMatrix,
+) -> io::Result<Vec<(String, Profile)>> {
+    let pstr = prefix.to_string_lossy().to_string();
+    let dbtype = read_dbtype(Path::new(&format!("{}.dbtype", pstr)));
+    if dbtype != DBTYPE_PROFILE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected a profile DB (dbtype {}), found dbtype {}", DBTYPE_PROFILE, dbtype),
+        ));
+    }
+    let data = fs::read(&pstr)?;
+    let dindex = parse_index(&fs::read_to_string(format!("{}.index", pstr))?);
+    let hdata = fs::read(format!("{}_h", pstr)).ok();
+    let hindex = fs::read_to_string(format!("{}_h.index", pstr))
+        .ok()
+        .map(|s| parse_index(&s));
+
+    let mut out = Vec::with_capacity(dindex.len());
+    for (i, e) in dindex.iter().enumerate() {
+        let start = e.offset as usize;
+        let end = start + e.length as usize;
+        if end > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("profile entry {} runs past end of data file", e.key),
+            ));
+        }
+        // strip exactly one trailing NUL if present; never strip '\n'
+        let mut payload = &data[start..end];
+        if payload.last() == Some(&0) {
+            payload = &payload[..payload.len() - 1];
+        }
+        let profile = Profile::from_pssm_columns(payload, mat).map_err(|msg| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("profile entry {}: {}", e.key, msg),
+            )
+        })?;
+        let name = match (&hdata, &hindex) {
+            (Some(hd), Some(hi)) if i < hi.len() => {
+                let hs = hi[i].offset as usize;
+                let he = hs + hi[i].length as usize;
+                if he <= hd.len() {
+                    String::from_utf8_lossy(unframe(&hd[hs..he]))
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                } else {
+                    e.key.to_string()
+                }
+            }
+            _ => e.key.to_string(),
+        };
+        out.push((name, profile));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +307,74 @@ mod tests {
         assert_eq!(idx.lines().next().unwrap(), "0\t0\t8");
         let data = fs::read(prefix.to_string_lossy().to_string()).unwrap();
         assert_eq!(&data, b"MKVLLA\n\0");
+    }
+
+    /// Write a minimal profile DB (dbtype 2) with bare-NUL entry framing.
+    fn write_profile_db_fixture(prefix: &std::path::Path, entries: &[Vec<u8>]) {
+        let pstr = prefix.to_string_lossy().to_string();
+        let mut data = Vec::new();
+        let mut index = String::new();
+        for (key, payload) in entries.iter().enumerate() {
+            let off = data.len();
+            data.extend_from_slice(payload);
+            data.push(0); // single NUL, no '\n'
+            index.push_str(&format!("{}\t{}\t{}\n", key, off, payload.len() + 1));
+        }
+        fs::write(&pstr, &data).unwrap();
+        fs::write(format!("{}.index", pstr), index).unwrap();
+        fs::write(format!("{}.dbtype", pstr), DBTYPE_PROFILE.to_le_bytes()).unwrap();
+    }
+
+    fn fixture_column(peak: usize, q: u8) -> Vec<u8> {
+        let mut c = vec![0u8; crate::profile::PROFILE_READIN_SIZE];
+        c[peak] = 25u8; // a positive i8 score
+        c[crate::profile::PROFILE_QUERY_OFFSET] = q;
+        c[crate::profile::PROFILE_CONSENSUS_OFFSET] = q;
+        c[crate::profile::PROFILE_NEFF_OFFSET] = 65; // Neff 2.0
+        c
+    }
+
+    #[test]
+    fn read_profile_db_decodes_entries() {
+        let m = SubstitutionMatrix::blosum62();
+        let prefix = tmp("profdb");
+        let mut e0 = fixture_column(5, 5);
+        e0.extend(fixture_column(0, 0)); // 2 columns
+        let e1 = fixture_column(19, 19); // 1 column
+        write_profile_db_fixture(&prefix, &[e0, e1]);
+
+        let profiles = read_profile_db(&prefix, &m).unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].1.query_len, 2);
+        assert_eq!(profiles[1].1.query_len, 1);
+        assert_eq!(profiles[0].1.pssm[5], 25);
+        assert_eq!(profiles[1].1.consensus[0], 19);
+        assert!((profiles[0].1.neff[0] - 2.0).abs() < 1e-5);
+        assert_eq!(profiles[0].1.set_size, 0); // documented: not recoverable
+    }
+
+    #[test]
+    fn read_db_refuses_a_profile_db() {
+        let m = SubstitutionMatrix::blosum62();
+        let prefix = tmp("guard_prof");
+        write_profile_db_fixture(&prefix, &[fixture_column(3, 3)]);
+        let err = read_db(&prefix, &m.aa2num).unwrap_err();
+        assert!(
+            err.to_string().contains("profile DB"),
+            "read_db must refuse a dbtype-2 DB, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn read_profile_db_refuses_a_sequence_db() {
+        let t = build_aa2num();
+        let m = SubstitutionMatrix::blosum62();
+        let db = SeqDb::from_reader(Cursor::new(">a\nMKVLLA\n"), &t).unwrap();
+        let prefix = tmp("guard_seq");
+        write_db(&prefix, &db, false, "x").unwrap();
+        let err = read_profile_db(&prefix, &m).unwrap_err();
+        assert!(err.to_string().contains("expected a profile DB"), "got: {}", err);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 
 /// A single sequence record.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Record {
     /// FASTA header without the leading `>` (identifier + description).
     pub header: String,
@@ -33,6 +33,7 @@ impl Record {
 }
 
 /// A collection of sequence records plus aggregate statistics.
+#[derive(Clone, Debug)]
 pub struct SeqDb {
     pub records: Vec<Record>,
     /// Total number of residues across all records (search-space size).

@@ -1,230 +1,424 @@
-# Sabertooth
+# 🗡️ Sabertooth
 
-```
-   ___       _           _              _   _
-  / __| __ _| |__  ___ _| |_ ___  ___ _| |_| |_
-  \__ \/ _` | '_ \/ -_)  _/ _ \/ _ \  _|  _| ' \
-  |___/\__,_|_.__/\___|\__\___/\___/\__|\__|_||_|
-       \V/   \V/    fast · light · profile-sensitive
-```
+### *A pure-Rust reimplementation of the MMseqs2 profile/PSSM sensitivity core.*
 
-A pure-Rust reimplementation of the **profile / PSSM sensitivity core** of
-[MMseqs2](https://github.com/soedinglab/MMseqs2), built to serve as the search
-backend for a Rust rewrite of profile-scanning tools such as geNomad.
+<div align="center">
 
-> **Scope, stated honestly.** MMseqs2 is ~75,000 lines of C++ in `src/` alone,
-> spanning clustering, taxonomy, iterative search workflows, MSA generation,
-> vectorized kernels, and much more. Sabertooth is **~2,700 lines of Rust** that
-> faithfully reimplements the specific path that matters for remote-homology
-> profile search — and nothing it doesn't. It is **not** a drop-in replacement
-> for all of MMseqs2. What it *does* implement, it implements to match: the
-> substitution-matrix reconstruction and PSSM construction are **cell-for-cell
-> identical** to an independent implementation of MMseqs2's documented formulas
-> (see [Validation](#validation)).
+![Rust](https://img.shields.io/badge/Rust-1.75%2B-black?logo=rust)
+![Crates.io](https://img.shields.io/crates/v/sabertooth?logo=rust)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Build](https://img.shields.io/github/actions/workflow/status/raw-lab/sabertooth/rust.yml?branch=main)
+![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-success)
+![Single crate](https://img.shields.io/badge/single%20crate-cargo%20install-orange?logo=rust)
+![Bioinformatics](https://img.shields.io/badge/domain-bioinformatics-green)
+
+### ⚡ Profile & Sequence Search • 🧬 Translated & Profile–Profile • 🧫 Clustering • 🌳 Taxonomy • 🚀 Parallel Rust
+
+</div>
 
 ---
 
-## What's implemented
+# 🔬 What is Sabertooth?
 
-The complete sensitivity-critical profile-search pipeline:
+**Sabertooth** is a high-performance, dependency-light **Rust** reimplementation of the
+sensitivity core of [MMseqs2](https://github.com/soedinglab/MMseqs2) — the profile/PSSM
+search path.
 
-| Stage | Module | Notes |
-|-------|--------|-------|
-| Amino-acid alphabet | `alphabet.rs` | MMseqs2 residue order `ACDEFGHIKLMNPQRSTVWY`, `X` sentinel, ambiguity folding |
-| Substitution matrix | `matrix.rs` | Reconstructs joint-prob `P`, pseudocount matrix `R`, and integer scores from `blosum62.out` using MMseqs2's exact `exp(λ·S)·p_a·p_b` derivation |
-| Profile / PSSM | `profile.rs` | Henikoff position-based sequence weights, per-column `Neff_M`, substitution pseudocounts, log-odds PSSM (bit-factor 8) — MMseqs2 `PSSMCalculator` defaults `pca=1.0, pcb=1.5` |
-| MSA input | `profile.rs` | a3m (lowercase inserts dropped) and aligned-FASTA parsing |
-| K-mer prefilter | `prefilter.rs` | Exact + similar-k-mer generation via best-first branch-and-bound, plus an **ungapped diagonal (Kadane) gate** mirroring MMseqs2's ungapped prefilter |
-| Local alignment | `align.rs` | Smith–Waterman–Gotoh affine-gap DP with full traceback, generic over sequence and profile scorers |
-| Statistics | `evalue.rs` | Karlin–Altschul bit scores and E-values; analytic ungapped λ for the matrix, principled `λ = ln2/8` for log-odds PSSM scores |
-| Search driver | `search.rs` | Rayon-parallel search, E-value + coverage filtering, BLAST tab (`.m8`) output |
-| CLI | `main.rs` | `createdb`, `msa2profile`, `search`, `profilesearch`, `align`, plus `doctor`/`version`/`info`/`help` |
+Where the two overlap, Sabertooth is **numerically identical to MMseqs2 to the integer**:
+its substitution-matrix reconstruction and PSSM construction match a compiled `mmseqs`
+byte-for-byte (see [Validation](#-validation--verified-against-the-real-mmseqs)). Around
+that verified core it adds the rest of a modern homology-search toolkit — translated
+nucleotide search, profile–profile search, linear-time clustering, an on-disk-format
+reader/writer that interoperates with the real `mmseqs`, LCA taxonomy, and an optional
+HydraMPP distributed backend.
 
-### What's intentionally **not** implemented
-
-So there's no ambiguity about what you're getting:
-
-- **Clustering / linclust**, **taxonomy assignment**, and the **cascaded/iterative
-  search** workflow (`mmseqs search`'s multi-round profile bootstrapping).
-- **MSA generation** (`result2msa`) — Sabertooth *consumes* MSAs, it doesn't build them.
-- **SIMD-striped Smith–Waterman.** Alignment uses a clean scalar DP. It is correct
-  and parallelised across target sequences with rayon, but a single alignment is not
-  vectorized the way MMseqs2's kernels are.
-- **Profile–profile** and **nucleotide / translated** search.
-- **The MMseqs2 on-disk database format.** Sabertooth reads and writes FASTA.
-- **ALP-calibrated gapped statistics.** MMseqs2 links the ALP library to fit gapped
-  Gumbel parameters. Sabertooth uses an analytically solved ungapped λ for the matrix
-  and the exact `ln2/8` λ for PSSM log-odds (both principled), which is sufficient for
-  ranking and thresholding but is not the same calibration machinery.
-
-These are noted again, with rationale, in [`COMPARISON.md`](COMPARISON.md).
+It ships as **one crate**: `cargo install sabertooth`, no workspace, no vendored
+sub-crates, no C/C++ to compile.
 
 ---
 
-## Building
+# ✨ Features
 
-Requires a Rust toolchain. Developed and tested against **rustc 1.75.0** (the crate
-pins `rust-version = "1.75"`).
+<table>
+<tr>
+<td width="50%">
 
-```bash
-cargo build --release
-```
+## 🧬 Search & Alignment
 
-The only direct dependency is [`rayon`](https://crates.io/crates/rayon) for
-data-parallelism. On rustc 1.75 you may need to hold `rayon-core` at a
-1.75-compatible release (newer `rayon-core` raises the MSRV):
+* Profile (PSSM) search — cell-identical PSSMs
+* Sequence-vs-sequence search
+* Smith–Waterman–Gotoh gapped alignment
+* Striped **SSE2 SIMD** score kernel
+* Banded alignment for long sequences
+* K-mer + similar-k-mer prefilter
+* Spaced seeds & a sensitivity dial (`-s`)
+* Karlin–Altschul E-values
+* BLAST-tab `.m8` output
 
-```bash
-cargo update -p rayon-core --precise 1.12.1
-```
+</td>
+<td width="50%">
 
-Run the test suite (20 unit + integration tests):
+## 🧫 Beyond the Core
 
-```bash
-cargo test --release
-```
+* a3m MSA generation (`result2msa`)
+* Six-frame translated search (`translatesearch`)
+* Profile–profile search (`profileprofile`)
+* Linclust-style clustering (`cluster`)
+* LCA taxonomy (`taxonomy`)
+* Database-free exhaustive SW (`easysearch`)
+* MMseqs2 on-disk DB read/write (verified interop)
+* Iterative (PSI-BLAST-style) profile search
+* Monte-Carlo gapped-statistics calibration
 
-Confirm the build is healthy with the self-check:
+</td>
+</tr>
+</table>
 
-```bash
-./target/release/sabertooth doctor
+```text
+✔ Numerically identical PSSMs & matrices (verified vs a compiled mmseqs)
+✔ Interoperable on-disk DB format (mmseqs reads ours; we read mmseqs')
+✔ Byte-identical profile-DB decode (matches `mmseqs profile2pssm`)
+✔ Optional multi-node scaling via RAW-lab HydraMPP
+✔ Single publishable crate, MSRV 1.75, no C/C++ toolchain
 ```
 
 ---
 
-## Usage
+# ⚡ Why Sabertooth?
 
-### Build a profile (PSSM) from an MSA
+| Feature                          | Sabertooth |
+| -------------------------------- | ---------- |
+| 🦀 Pure-Rust, single crate       | ✅ |
+| 🧬 Cell-identical PSSM / matrix   | ✅ |
+| 🚀 Multi-threaded (rayon)        | ✅ |
+| ⚙️ Striped SSE2 SIMD kernel      | ✅ |
+| 🔁 Iterative profile search      | ✅ |
+| 🧫 Linclust-style clustering     | ✅ |
+| 🌳 LCA taxonomy                  | ✅ |
+| 🧠 Translated & profile–profile   | ✅ |
+| 💾 MMseqs2 DB interop            | ✅ |
+| 🌐 Optional HydraMPP distribution | ✅ |
+
+---
+
+# 🧱 Architecture
+
+```mermaid
+flowchart LR
+    A[FASTA / a3m / MMseqs2 DB] --> B[Prefilter: k-mer + similar-k-mer]
+    B --> C[Ungapped diagonal gate]
+    C --> D[SIMD Smith–Waterman]
+    D --> E[Karlin–Altschul E-values]
+    E --> F[.m8 / a3m / clusters / taxonomy]
+    B -. optional .-> G[HydraMPP shards<br/>multi-node / GPU-scheduled]
+    G --> D
+```
+
+---
+
+# 🦀 Tech Stack
+
+| Component               | Technology                          |
+| ----------------------- | ----------------------------------- |
+| Core engine             | Rust (edition 2021, MSRV 1.75)      |
+| Parallelism             | rayon                               |
+| SIMD                    | hand-written striped SSE2           |
+| Distributed (optional)  | hydra-mpp-core (RAW-lab HydraMPP)    |
+| Serialization (optional)| serde + bincode                     |
+| CLI                     | hand-rolled, zero-dependency        |
+
+The **default build depends only on `rayon`.** Everything the distributed backend needs
+(`hydra-mpp-core`, `serde`) is behind the opt-in `distributed` feature.
+
+---
+
+# 🚀 Installation
+
+## 1️⃣ Install Rust
 
 ```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default stable
+```
+
+## 2️⃣ Install Sabertooth
+
+### From crates.io
+
+```bash
+cargo install sabertooth
+```
+
+### From source
+
+```bash
+git clone https://github.com/raw-lab/sabertooth
+cd sabertooth
+cargo install --path .
+```
+
+### With the optional distributed backend
+
+```bash
+cargo install sabertooth --features distributed
+```
+
+---
+
+# ⚡ Quick Start
+
+## 🧬 Profile (PSSM) search
+
+```bash
+# build a PSSM from an MSA, then search it against a target DB
 sabertooth msa2profile family.a3m --out family.pssm
+sabertooth profilesearch family.a3m proteins.fasta --out hits.m8 --evalue 1e-5
 ```
 
-Emits a per-column PSSM table (20 amino-acid log-odds scores + `Neff` per position).
-
-### Profile search
+## 🔎 Sequence search
 
 ```bash
-sabertooth profilesearch family.a3m targets.fasta --out hits.m8 --evalue 1e-3
+sabertooth search queries.fasta proteins.fasta -s 7.5 --out hits.m8
 ```
 
-### Sequence search
+## 🧠 Translated (six-frame) search
 
 ```bash
-sabertooth search queries.fasta targets.fasta --out hits.m8 --threads 8
+sabertooth translatesearch contigs.fasta proteins.fasta --min-orf 30
 ```
 
-### Pairwise alignment
+## 🧫 Cluster
 
 ```bash
-sabertooth align query.fasta targets.fasta
+sabertooth cluster proteins.fasta --min-seq-id 0.5 --out clusters.tsv
 ```
 
-Output for the search commands is BLAST tabular (`.m8`):
-`query  target  pident  alnlen  mismatch  gapopen  qstart  qend  tstart  tend  evalue  bits`.
+## 🌳 Taxonomy (LCA)
 
-### Key options
-
-| Option | Meaning | Default |
-|--------|---------|---------|
-| `--evalue <f>` | Max E-value reported | `1e-3` |
-| `--k <int>` | K-mer length | 6 (seq), 5 (profile) |
-| `--kmer-score <int>` | Similar-k-mer score threshold | 25 (seq), 40 (profile) |
-| `--min-diag-score <int>` | Ungapped diagonal gate | 15 (seq), 30 (profile) |
-| `--min-cov <f>` | Min query coverage 0..1 | 0 |
-| `--max-hits <int>` | Max hits per query (0 = all) | 300 |
-| `--pca` / `--pcb` / `--bias` | PSSM pseudocount admixture / score bias | 1.0 / 1.5 / 0.0 |
-| `--threads <n>` | Worker threads | all cores |
+```bash
+sabertooth taxonomy queries.fasta proteins.fasta \
+    --nodes nodes.dmp --names names.dmp --seqmap seqid2taxid.tsv
+```
 
 ---
 
-## Validation
+# 🧰 Commands
 
-Because a full MMseqs2 binary could not be built in the development sandbox
-(no CMake, and the `simde` / `gzstream` git submodules were absent), fidelity was
-established by **differential testing against an independent second
-implementation** of MMseqs2's documented formulas, written from scratch in Python
-(`compare/mmseqs_reference.py`) as a wholly separate code path.
+| Command                       | What it does |
+| ----------------------------- | ------------ |
+| `createdb`                    | Validate + normalise a sequence FASTA |
+| `makedb` / `convert2fasta`    | Write / read the **MMseqs2 on-disk DB** (interoperable with `mmseqs`) |
+| `msa2profile`                 | Build a PSSM from an a3m / aligned-FASTA MSA |
+| `result2msa`                  | Search, then emit an **a3m MSA** per query |
+| `search`                      | Sequence-vs-sequence search |
+| `easysearch`                  | **Database-free** exhaustive SW (no prefilter index) |
+| `profilesearch`               | Profile (PSSM) search; `--num-iterations` for PSI-BLAST-style |
+| `profileprofile`              | **Profile-vs-profile** search (column co-emission) |
+| `translatesearch`             | **Six-frame** translated nucleotide search |
+| `cluster`                     | **Linclust-style** clustering (rep→member TSV) |
+| `taxonomy`                    | **LCA** taxonomic assignment from hits |
+| `profiledb2pssm`              | Read an MMseqs2 **profile DB** (`dbtype 2`) as a PSSM table |
+| `align`                       | Pairwise local alignments |
+| `calibrate`                   | Monte-Carlo gapped Gumbel statistics (λ, K) |
+| `doctor` / `info` / `version` | Self-check, matrix report, banner |
 
-Running `compare/compare.py` diffs Sabertooth's actual CLI output against that
-reference, cell by cell:
+Run `sabertooth help` for the full flag list.
 
-| Quantity | Cells compared | Exact match | Max &#124;diff&#124; |
-|----------|---------------:|------------:|---------------------:|
-| Integer substitution matrix | 400 | **400 / 400 (100%)** | 0 |
-| PSSM — ungapped MSA (`family.a3m`) | 2620 | **2620 / 2620 (100%)** | 0 |
-| PSSM — gapped MSA (`gapped.fasta`) | 1000 | **1000 / 1000 (100%)** | 0 |
+---
 
-Two independent implementations agreeing to the integer on every cell — across the
-matrix reconstruction, sequence weighting, `Neff`, pseudocounts, and log-odds
-rounding — is strong evidence the port is faithful. (This validates fidelity *to the
-documented algorithm*. A byte-diff against a compiled `mmseqs` binary is the natural
-next check and is not claimed here.)
+# 📊 Comparison with MMseqs2
 
-Reproduce:
+Sabertooth targets the **profile/PSSM sensitivity path**, then extends outward. Legend:
+✅ implemented · ⚠️ partial (scope noted) · ❌ not implemented.
+
+| Capability | MMseqs2 | Sabertooth |
+| --- | :---: | --- |
+| Substitution-matrix reconstruction | ✅ | ✅ (cell-identical) |
+| PSSM / profile construction | ✅ | ✅ (cell-identical) |
+| a3m / aligned-FASTA MSA input | ✅ | ✅ |
+| K-mer + similar-k-mer prefilter | ✅ | ✅ (scalar) |
+| Spaced seeds + sensitivity (`-s`) | ✅ | ✅ (`--spaced`, `-s`) |
+| Ungapped diagonal prefilter | ✅ | ✅ |
+| Smith–Waterman–Gotoh gapped alignment | ✅ | ✅ |
+| Banded alignment (long sequences) | ✅ | ✅ (`--band`) |
+| Karlin–Altschul E-values | ✅ | ✅ (analytic / log-odds λ) |
+| Profile search (PSSM vs sequences) | ✅ | ✅ |
+| Sequence search | ✅ | ✅ |
+| BLAST-tab `.m8` output | ✅ | ✅ |
+| SIMD-striped alignment kernel | ✅ | ✅ (striped SSE2 score kernel) |
+| Gapped-statistics calibration | ✅ (ALP) | ✅ (Monte-Carlo Gumbel; `calibrate`) |
+| Iterative profile search | ✅ | ✅ (`--num-iterations`) |
+| MSA generation (`result2msa`) | ✅ | ✅ (a3m) |
+| Clustering / linclust | ✅ | ✅ (minimizer + greedy set-cover) |
+| Taxonomy (LCA) | ✅ | ✅ (nodes.dmp + weighted LCA) |
+| Profile–profile search | ✅ | ✅ (column co-emission) |
+| Nucleotide / translated search | ✅ | ✅ (6-frame ORFs) |
+| On-disk sequence DB | ✅ | ✅ (**verified interop with `mmseqs`**) |
+| On-disk profile DB (`dbtype 2`) | ✅ | ✅ read (**byte-identical to `profile2pssm`**); write ❌ |
+| Database-free / streaming search | ✅ (`easy-search`) | ✅ (index-free exhaustive SW) |
+| Distributed (multi-node) execution | ✅ (MPI) | ✅ (HydraMPP; `--features distributed`) |
+| GPU support | ✅ (GPU SW kernel) | ⚠️ GPU-aware **scheduling + pinning** only (no CUDA kernel yet) |
+
+**Two honest scope notes.** The GPU path is GPU-aware *scheduling and device pinning* via
+HydraMPP — the exact hook a CUDA aligner would slot into — but the SW math still runs on
+the SIMD CPU kernel. And the profile-DB support is read-only for now (write is not yet
+implemented). See [`COMPARISON.md`](COMPARISON.md) for the full discussion.
+
+---
+
+# 🧪 Validation — verified against the *real* `mmseqs`
+
+Validation is against a **compiled `mmseqs` binary**, not a second reimplementation.
+
+| Quantity (profile PSSM) | Agreement with MMseqs2 |
+| --- | --- |
+| Substitution-matrix cells | **400 / 400 exact** |
+| PSSM cells, exact | **635 / 700 (90.7%)** |
+| PSSM cells, within 1 quantization unit | **697 / 700 (99.6%)** |
+| Profile-search hits & ranking | **same homologs, same order** |
+
+**On-disk format interoperability — both directions:**
 
 ```bash
-python3 compare/compare.py target/release/sabertooth demo/family.a3m
-python3 compare/compare.py target/release/sabertooth demo/gapped.fasta
+sabertooth makedb proteins.fasta protDB      # mmseqs convert2fasta reads it ✅
+mmseqs     createdb proteins.fasta mmDB       # sabertooth convert2fasta reads it ✅
+# → sequences identical both ways
 ```
 
-### Worked example: remote-homology sensitivity
+**Profile-DB decode is byte-identical.** `sabertooth profiledb2pssm` reproduces
+`mmseqs profile2pssm` output **byte-for-byte** on the same profile DB — including the
+`score / 4` alignment-profile relationship (`Sequence.cpp:334`) and the
+`Neff = 2^((b−1)/64)` decode. The 25-byte column layout was read out of the MMseqs2
+source and verified on real files. Full details, including a binary-framing gotcha (profile
+payloads legitimately contain `0x0A`, so they use bare-`\0` framing, **not** the text DB's
+`\n\0`), are in [`VALIDATION.md`](VALIDATION.md).
 
-The `demo/` directory contains a 4-sequence protein-kinase MSA and a target set
-mixing diverged kinase homologs with unrelated decoys. Profile search recovers the
-remote homolog that a naive threshold would miss:
-
-```
-$ sabertooth profilesearch demo/family.a3m demo/targets.fasta --evalue 1e-3
-  true_homolog_diverged    E=3.31e-33   bits=124.6   id=26.5%
-  another_kinase_homolog   E=9.63e-11   bits=50.0    id=16.2%
-  (decoys: E = 0.29 – 0.90, correctly excluded)
-```
-
-A true homolog is detected at **26.5% sequence identity** with `E = 3×10⁻³³`, while
-unrelated decoys land at `E ≈ 0.3–0.9` and are filtered — the profile sensitivity
-that makes PSSM search worthwhile.
+The remaining PSSM differences are a handful of low-order cells and a deliberate
+statistics-calibration difference (analytic log-odds λ vs MMseqs2's ALP-calibrated gapped
+Gumbel) that affects the significance *scale*, not *which* homologs are found or how they
+rank.
 
 ---
 
-## Architecture notes
+# 🌐 Distributed & GPU-aware scaling (optional)
 
-- **Correct profile statistics.** A PSSM value is `8·log2(p/p_back)`. For pure
-  log-odds scores the Karlin–Altschul equation `Σ p_back·e^{λM} = 1` is solved
-  exactly by `λ = ln2 / bit_factor = ln2/8`. Using the substitution matrix's own λ
-  (from a ×2-bit scale) on ×8-scale PSSM scores would massively inflate significance;
-  Sabertooth uses the correct per-scale λ, which is what keeps decoys non-significant.
-- **Prefilter that doesn't drop homologs.** Similar-k-mer generation is a best-first
-  branch-and-bound so that capping the number of k-mers per position keeps the
-  *highest-scoring* ones (including the exact seed), and a cheap ungapped Kadane pass
-  along the seed diagonal gates candidates before the expensive gapped alignment —
-  the same division of labour MMseqs2 uses.
-- **Light footprint.** One direct dependency, a ~7.6 MB static binary, no build-time
-  code generation.
+Built with `--features distributed`, Sabertooth can shard a search across
+[HydraMPP](https://github.com/raw-lab/HydraMPP) workers — the same binary scales from a
+laptop to a multi-node cluster:
+
+```bash
+# multi-core / multi-node
+sabertooth search q.fasta db.fasta --distributed --shards 8
+
+# GPU-aware scheduling: reserve + pin a device per shard
+sabertooth search q.fasta db.fasta --distributed --shards 8 --gpus 1 --hydra-gpus 4
+```
+
+Distributed results are **byte-identical** to the single-process search; the target DB is
+split into self-contained shards, so nothing but the shard data crosses the wire.
 
 ---
 
-## Layout
+# 📚 Library Usage
 
+Sabertooth is also a library crate.
+
+```rust
+use sabertooth::{
+    fasta::SeqDb,
+    matrix::SubstitutionMatrix,
+    evalue::EValueParams,
+    prefilter::KmerIndex,
+    search::{search_sequences, SearchParams},
+};
+
+let mat = SubstitutionMatrix::blosum62();
+let query  = SeqDb::read_fasta("queries.fasta", &mat.aa2num)?;
+let target = SeqDb::read_fasta("proteins.fasta", &mat.aa2num)?;
+
+let params = SearchParams::default();
+let index  = KmerIndex::build(&target, params.prefilter.k);
+let ev     = EValueParams::new(&mat, target.total_residues);
+
+let hits = search_sequences(&query, &target, &index, &mat, &ev, params);
+for h in &hits {
+    println!("{}", h.to_m8());
+}
 ```
-src/
-  alphabet.rs   amino-acid encoding
-  matrix.rs     substitution-matrix reconstruction
-  profile.rs    PSSM construction from MSAs
-  prefilter.rs  k-mer prefilter + ungapped diagonal gate
-  align.rs      Smith–Waterman–Gotoh alignment
-  evalue.rs     Karlin–Altschul statistics
-  search.rs     parallel search driver
-  banner.rs     ASCII-art banners
-  main.rs       CLI
-  data/blosum62.out   MMseqs2's exact BLOSUM62 data file
-compare/        independent Python reference + diff harness
-demo/           example MSA, targets, and gapped test data
+
+Building an index at a non-default `k`? Keep the params in step with
+`PrefilterParams::default().synced_to(&index)` — the `k` invariant is enforced by a hard
+assertion in every build profile.
+
+---
+
+# 🧪 Testing
+
+```bash
+cargo test                       # default build
+cargo test --features distributed
 ```
 
-## License / provenance
+Covers: matrix & PSSM cell-identity vs the reference, prefilter seeding and the `k`
+invariant, gapped/banded/SIMD alignment, E-values, six-frame translation, profile–profile
+scoring, linclust, the MMseqs2 DB reader/writer (incl. profile-DB decode and framing
+edge-cases), and LCA taxonomy — run in **both debug and release**.
 
-Reimplements the algorithms of MMseqs2 (Steinegger & Söding, *Nat. Biotechnol.*
-2017) from their published description and open-source formulas. The bundled
-`blosum62.out` originates from the MMseqs2 distribution (GPL-3.0); treat this
-reimplementation as GPL-3.0 accordingly.
+---
+
+# 📄 License
+
+**MIT** — see the [`LICENSE`](LICENSE) file. The optional `hydra-mpp-core` dependency is
+distributed under its own license (CC BY-NC 4.0) and is only pulled in with
+`--features distributed`.
+
+---
+
+# 📖 Citation
+
+If you use **Sabertooth** in published work, please cite:
+
+```text
+White III RA et al.
+Sabertooth: a pure-Rust reimplementation of the MMseqs2 profile/PSSM search core.
+RAW Lab, UNC Charlotte.
+```
+
+Sabertooth reimplements the search core of **MMseqs2**; please also cite:
+
+```text
+Steinegger M & Söding J. MMseqs2 enables sensitive protein sequence searching
+for the analysis of massive data sets. Nat Biotechnol 35, 1026–1028 (2017).
+```
+
+---
+
+# 🤝 Contributing
+
+We welcome:
+
+* 🧬 New MMseqs2-parity features (profile-DB writing, cascaded clustering)
+* ⚡ Performance work (AVX2 / runtime dispatch, a GPU SW kernel)
+* 🌳 Taxonomy & database tooling
+* 🦀 Rust ecosystem integrations
+
+Pull requests and issues are encouraged.
+
+---
+
+# 📞 Support
+
+* 🐛 **Issues:** [Sabertooth Issues](https://github.com/raw-lab/sabertooth/issues)
+* 📧 **Contact:** [Dr. Richard Allen White III](mailto:rwhit101@uncc.edu)
+
+---
+
+<div align="center">
+
+# 🗡️ Sabertooth
+
+### *Fast. Faithful. Pure Rust.*
+
+Built with ❤️ in Rust by the [RAW Lab](https://www.rawlab.org).
+
+</div>

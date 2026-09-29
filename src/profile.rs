@@ -20,18 +20,44 @@
 //!
 //! Defaults `pca = 1.0`, `pcb = 1.5`, `bias = 0.0` reproduce MMseqs2's defaults.
 
-use crate::alphabet::{aa_to_num, num_to_aa, ANY, GAP, PROFILE_AA_SIZE};
+use crate::alphabet::{aa_to_num, num_to_aa, ALPHABET_SIZE, ANY, GAP, PROFILE_AA_SIZE};
 use crate::matrix::SubstitutionMatrix;
 
 /// Bit factor used when converting profile probabilities to integer PSSM
 /// scores. MMseqs2 uses 8 (scores are eighth-bits / ×8 log-odds).
 pub const PROFILE_BIT_FACTOR: f64 = 8.0;
 
+/// Bytes per column in an on-disk MMseqs2 profile DB entry
+/// (`Sequence::PROFILE_READIN_SIZE`).
+pub const PROFILE_READIN_SIZE: usize = 25;
+/// Byte offset of the query residue within a profile column.
+pub const PROFILE_QUERY_OFFSET: usize = 20;
+/// Byte offset of the consensus residue within a profile column.
+pub const PROFILE_CONSENSUS_OFFSET: usize = 21;
+/// Byte offset of the quantized Neff within a profile column.
+pub const PROFILE_NEFF_OFFSET: usize = 22;
+// offsets 23, 24 are gap-open/gap-extend (`PROFILE_GAP_DEL` / `PROFILE_GAP_INS`),
+// which Sabertooth does not model per column.
+
+/// Decode MMseqs2's quantized Neff byte: `2^((b - 1) / 64)`
+/// (`MathUtil::convertNeffToFloat`).
+#[inline]
+pub fn neff_from_byte(b: u8) -> f32 {
+    ((b as f32 - 1.0) / 64.0).exp2()
+}
+
 /// A computed sequence profile.
+#[derive(Clone, Debug)]
 pub struct Profile {
     /// Number of match-state columns (== query length).
     pub query_len: usize,
     /// Number of sequences in the source MSA.
+    ///
+    /// **Not recoverable from an on-disk MMseqs2 profile DB**: the 25-byte column
+    /// format stores per-column `Neff` but never the source MSA's sequence count,
+    /// so [`Profile::from_pssm_columns`] sets this to `0`. It is unused by search
+    /// and alignment (only `pssm`, `prob`, `neff`, `consensus`, `query_num` are),
+    /// so a `set_size` of 0 on a DB-loaded profile is expected, not an error.
     pub set_size: usize,
     /// Integer PSSM, row-major `query_len × PROFILE_AA_SIZE` (`i8`).
     pub pssm: Vec<i8>,
@@ -65,6 +91,102 @@ impl Default for PseudoCountParams {
 }
 
 impl Profile {
+    /// Decode a profile from the raw column bytes of an on-disk MMseqs2 profile
+    /// DB entry (`dbtype == 2`).
+    ///
+    /// Each column is [`PROFILE_READIN_SIZE`] = 25 bytes, laid out exactly as
+    /// `Sequence::mapProfile` reads them:
+    ///
+    /// | offset | contents |
+    /// |---|---|
+    /// | `0..20` | 20 `i8` PSSM scores, ×8 log-odds (`PROFILE_BIT_FACTOR`), in `NUM2AA` order |
+    /// | `20`    | query residue (numeric index) |
+    /// | `21`    | consensus residue (numeric index) |
+    /// | `22`    | quantized Neff, decoded by [`neff_from_byte`] |
+    /// | `23..25`| gap del/ins bytes (not modelled here) |
+    ///
+    /// The stored scores are on the **same ×8 scale as [`Profile::pssm`]**; MMseqs2
+    /// divides by 4 only when building its alignment profile
+    /// (`Sequence.cpp`: `profile_for_alignment = profile_score / 4`), which is why
+    /// `mmseqs profile2pssm` dumps `score / 4`.
+    ///
+    /// A single trailing `NUL` terminator is tolerated and stripped. Note that
+    /// profile entries are framed with a bare `\0` — **not** the `\n\0` used for
+    /// text entries — because the binary payload legitimately contains `0x0A`.
+    ///
+    /// `prob` is **reconstructed** by inverting the log-odds
+    /// (`p[a] ∝ p_back[a] · 2^(pssm[a]/8)`, renormalized): the DB stores quantized
+    /// integer scores, not posteriors, so this is lossy (scores saturate at the
+    /// `i8` bounds). `set_size` is set to `0` — see the field docs.
+    pub fn from_pssm_columns(bytes: &[u8], mat: &SubstitutionMatrix) -> Result<Profile, String> {
+        // tolerate the single NUL terminator used by the DB framing
+        let data = if bytes.len() % PROFILE_READIN_SIZE == 1 && bytes.last() == Some(&0) {
+            &bytes[..bytes.len() - 1]
+        } else {
+            bytes
+        };
+        if data.is_empty() {
+            return Err("profile entry is empty".into());
+        }
+        if data.len() % PROFILE_READIN_SIZE != 0 {
+            return Err(format!(
+                "profile entry length {} is not a multiple of {} bytes per column",
+                data.len(),
+                PROFILE_READIN_SIZE
+            ));
+        }
+        let query_len = data.len() / PROFILE_READIN_SIZE;
+        let mut pssm = vec![0i8; query_len * PROFILE_AA_SIZE];
+        let mut prob = vec![0f32; query_len * PROFILE_AA_SIZE];
+        let mut neff = vec![0f32; query_len];
+        let mut consensus = vec![0u8; query_len];
+        let mut query_num = vec![0u8; query_len];
+
+        for col in 0..query_len {
+            let base = col * PROFILE_READIN_SIZE;
+            let out = col * PROFILE_AA_SIZE;
+            // 20 signed score bytes, already on the ×8 scale
+            for a in 0..PROFILE_AA_SIZE {
+                pssm[out + a] = data[base + a] as i8;
+            }
+            let q = data[base + PROFILE_QUERY_OFFSET];
+            let c = data[base + PROFILE_CONSENSUS_OFFSET];
+            if q as usize >= ALPHABET_SIZE || c as usize >= ALPHABET_SIZE {
+                return Err(format!(
+                    "column {}: query/consensus residue index out of range ({}, {}); \
+                     is this really a profile DB (dbtype 2)?",
+                    col, q, c
+                ));
+            }
+            query_num[col] = q;
+            consensus[col] = c;
+            neff[col] = neff_from_byte(data[base + PROFILE_NEFF_OFFSET]);
+
+            // invert the log-odds to recover an (approximate) posterior
+            let mut sum = 0f64;
+            for a in 0..PROFILE_AA_SIZE {
+                let p = mat.p_back[a] * (pssm[out + a] as f64 / PROFILE_BIT_FACTOR).exp2();
+                prob[out + a] = p as f32;
+                sum += p;
+            }
+            if sum > 0.0 {
+                for a in 0..PROFILE_AA_SIZE {
+                    prob[out + a] = (prob[out + a] as f64 / sum) as f32;
+                }
+            }
+        }
+
+        Ok(Profile {
+            query_len,
+            set_size: 0, // not recoverable from the DB — see field docs
+            pssm,
+            prob,
+            neff,
+            consensus,
+            query_num,
+        })
+    }
+
     /// PSSM score for aligning a target residue (internal index) at a query
     /// position. Target `X`/unknown scores 0 (neutral), matching the practical
     /// behaviour of profile search on masked residues.
@@ -451,6 +573,116 @@ pub fn parse_msa(data: &str, aa2num: &[u8; 256]) -> Result<(Vec<Vec<u8>>, usize)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build one 25-byte profile column: scores, query, consensus, neff byte.
+    fn col(scores: &[i8; PROFILE_AA_SIZE], q: u8, cns: u8, neff_b: u8) -> Vec<u8> {
+        let mut v = Vec::with_capacity(PROFILE_READIN_SIZE);
+        v.extend(scores.iter().map(|&s| s as u8));
+        v.push(q);
+        v.push(cns);
+        v.push(neff_b);
+        v.push(0); // gap del
+        v.push(0); // gap ins
+        v
+    }
+
+    #[test]
+    fn neff_byte_decodes_as_pow2() {
+        // MathUtil::convertNeffToFloat: 2^((b-1)/64)
+        assert!((neff_from_byte(1) - 1.0).abs() < 1e-6);
+        assert!((neff_from_byte(65) - 2.0).abs() < 1e-5);
+        assert!((neff_from_byte(129) - 4.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn from_pssm_columns_decodes_all_fields() {
+        let m = SubstitutionMatrix::blosum62();
+        let mut s = [0i8; PROFILE_AA_SIZE];
+        s[0] = -4; // A
+        s[5] = 21; // G  (matches the real family.a3m column 0)
+        s[19] = -7; // Y
+        let q = m.aa2num[b'G' as usize];
+        let cns = m.aa2num[b'G' as usize];
+        let bytes = col(&s, q, cns, 65); // neff byte 65 -> 2.0
+        let p = Profile::from_pssm_columns(&bytes, &m).unwrap();
+
+        assert_eq!(p.query_len, 1);
+        assert_eq!(p.set_size, 0); // not recoverable from a profile DB
+        assert_eq!(p.pssm[0], -4);
+        assert_eq!(p.pssm[5], 21);
+        assert_eq!(p.pssm[19], -7);
+        assert_eq!(p.query_num[0], q);
+        assert_eq!(p.consensus[0], cns);
+        assert!((p.neff[0] - 2.0).abs() < 1e-5);
+        // reconstructed posterior is a normalized distribution favouring G
+        let sum: f32 = p.prob[0..PROFILE_AA_SIZE].iter().sum();
+        assert!((sum - 1.0).abs() < 1e-4, "prob must sum to 1, got {}", sum);
+        let best = (0..PROFILE_AA_SIZE)
+            .max_by(|&a, &b| p.prob[a].partial_cmp(&p.prob[b]).unwrap())
+            .unwrap();
+        assert_eq!(best, 5, "highest-scoring residue should carry most mass");
+    }
+
+    #[test]
+    fn newline_bytes_inside_payload_survive() {
+        // 0x0A ('\n') is a legitimate score/residue byte. A `\n\0` text unframing
+        // would corrupt the last column; only a bare NUL may be stripped.
+        let m = SubstitutionMatrix::blosum62();
+        let mut s = [0i8; PROFILE_AA_SIZE];
+        s[3] = 10; // 0x0A as a score
+        let q = m.aa2num[b'E' as usize];
+        let mut bytes = col(&s, q, q, 10); // 0x0A as the neff byte too
+        // last data byte (gap ins) is 0x0A as well, immediately before the NUL
+        let last = bytes.len() - 1;
+        bytes[last] = 10;
+        bytes.push(0); // the DB's single NUL terminator
+
+        let p = Profile::from_pssm_columns(&bytes, &m).unwrap();
+        assert_eq!(p.query_len, 1, "one column must survive the terminator strip");
+        assert_eq!(p.pssm[3], 10);
+        assert!((p.neff[0] - neff_from_byte(10)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn from_pssm_columns_rejects_bad_length_and_bad_residue() {
+        let m = SubstitutionMatrix::blosum62();
+        assert!(Profile::from_pssm_columns(&[], &m).is_err());
+        assert!(Profile::from_pssm_columns(&[0u8; 24], &m).is_err()); // not a multiple of 25
+        let mut bad = col(&[0i8; PROFILE_AA_SIZE], 99, 0, 1); // residue index 99
+        bad.truncate(PROFILE_READIN_SIZE);
+        let err = Profile::from_pssm_columns(&bad, &m).unwrap_err();
+        assert!(err.contains("out of range"), "got: {}", err);
+    }
+
+    #[test]
+    fn multi_column_roundtrip_preserves_order() {
+        let m = SubstitutionMatrix::blosum62();
+        let mut bytes = Vec::new();
+        for i in 0..5u8 {
+            let mut s = [0i8; PROFILE_AA_SIZE];
+            s[i as usize] = 20 + i as i8; // distinct peak per column
+            bytes.extend(col(&s, i, i, 1));
+        }
+        let p = Profile::from_pssm_columns(&bytes, &m).unwrap();
+        assert_eq!(p.query_len, 5);
+        for i in 0..5usize {
+            assert_eq!(p.pssm[i * PROFILE_AA_SIZE + i], 20 + i as i8);
+            assert_eq!(p.query_num[i], i as u8);
+        }
+    }
+
+    #[test]
+    fn profile_is_clone_and_debug() {
+        let m = SubstitutionMatrix::blosum62();
+        let p = Profile::from_msa_str(">q\nMKVLLACDEFGHIK\n", &m, PseudoCountParams::default())
+            .unwrap();
+        let c = p.clone();
+        assert_eq!(c.query_len, p.query_len);
+        assert!(format!("{:?}", c).starts_with("Profile {"));
+        // Debug on the Ok type is what makes unwrap_err() usable
+        let e = Profile::from_msa_str("", &m, PseudoCountParams::default()).unwrap_err();
+        assert!(!e.is_empty());
+    }
 
     #[test]
     fn single_sequence_profile_tracks_matrix() {

@@ -61,6 +61,8 @@ dependencies = [
 [[package]]
 name = "hydra-mpp-core"
 version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4f81818b44081e8fab357fdc096205fb21ea193a7c416978ad3f24e9d59cf23"
 dependencies = [
  "anyhow",
  "bincode",

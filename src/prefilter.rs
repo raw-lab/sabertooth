@@ -168,6 +168,20 @@ impl Default for PrefilterParams {
     }
 }
 
+impl PrefilterParams {
+    /// Return a copy of these params with `k` taken from `index`'s seed weight.
+    ///
+    /// The index is authoritative for k-mer lookup, so this is the safe way to
+    /// pair params with an index that was built at a non-default `k` (or from a
+    /// spaced mask, where `k` is the mask's *weight*, not its span). Using it
+    /// makes the hard assertion in [`prefilter_sequence`] / [`prefilter_profile`]
+    /// unreachable.
+    pub fn synced_to(mut self, index: &KmerIndex) -> Self {
+        self.k = index.pattern().weight();
+        self
+    }
+}
+
 /// A prefilter candidate: a target plus seeding evidence.
 pub struct Candidate {
     pub target_id: u32,
@@ -450,6 +464,16 @@ where
 }
 
 /// Prefilter a plain sequence query against the index.
+///
+/// # Panics
+///
+/// Panics if `params.k` disagrees with the index's seed weight. The index is
+/// authoritative for k-mer lookup, so a mismatch means the caller's `params`
+/// describe a different seeding than the one actually performed — silently
+/// proceeding would produce input-dependent, wrong-by-configuration results.
+/// This is a hard assertion (not `debug_assert!`) precisely so it cannot be
+/// compiled out of a release build. Use [`PrefilterParams::synced_to`] to keep
+/// the two in step.
 pub fn prefilter_sequence(
     query: &[u8],
     db: &SeqDb,
@@ -460,7 +484,12 @@ pub fn prefilter_sequence(
     let pattern = index.pattern();
     let w = pattern.weight();
     let span = pattern.span();
-    debug_assert_eq!(w, params.k, "index weight and params k must match");
+    assert_eq!(
+        w, params.k,
+        "prefilter index seed weight ({}) != params.k ({}); \
+         the index is authoritative — sync with PrefilterParams::synced_to(&index)",
+        w, params.k
+    );
     let mut acc = HitAccumulator::new();
     if query.len() < span {
         return Vec::new();
@@ -495,6 +524,12 @@ pub fn prefilter_sequence(
 }
 
 /// Prefilter a profile (PSSM) query against the index.
+///
+/// # Panics
+///
+/// Panics if `params.k` disagrees with the index's seed weight — see
+/// [`prefilter_sequence`] for why this is a hard assertion rather than a
+/// `debug_assert!`.
 pub fn prefilter_profile(
     profile: &Profile,
     db: &SeqDb,
@@ -504,7 +539,12 @@ pub fn prefilter_profile(
     let pattern = index.pattern();
     let w = pattern.weight();
     let span = pattern.span();
-    debug_assert_eq!(w, params.k, "index weight and params k must match");
+    assert_eq!(
+        w, params.k,
+        "prefilter index seed weight ({}) != params.k ({}); \
+         the index is authoritative — sync with PrefilterParams::synced_to(&index)",
+        w, params.k
+    );
     let mut acc = HitAccumulator::new();
     if profile.query_len < span {
         return Vec::new();
@@ -551,6 +591,63 @@ mod tests {
         assert!(!cands.is_empty());
         // t1 should be the top candidate
         assert_eq!(cands[0].target_id, 0);
+    }
+
+    // The k invariant must hold in *every* build profile: a `debug_assert!` here
+    // was compiled out of release, letting a mismatched `params.k` be silently
+    // ignored in favour of the index's weight. These tests run under both
+    // `cargo test` and `cargo test --release`.
+
+    #[test]
+    #[should_panic(expected = "index seed weight")]
+    fn mismatched_k_panics_in_sequence_prefilter() {
+        let m = SubstitutionMatrix::blosum62();
+        let db = db_from(">t\nMKVLLACDEFGHIKLMNPQRSTVWY\n");
+        let idx = KmerIndex::build(&db, 5); // weight 5
+        let t = build_aa2num();
+        let q: Vec<u8> = "MKVLLACDEFGHIKLMNPQRSTVWY".bytes().map(|b| t[b as usize]).collect();
+        let mut p = PrefilterParams::default();
+        p.k = 6; // ...but params claim 6
+        let _ = prefilter_sequence(&q, &db, &idx, &m, p);
+    }
+
+    #[test]
+    #[should_panic(expected = "index seed weight")]
+    fn mismatched_k_panics_in_profile_prefilter() {
+        let m = SubstitutionMatrix::blosum62();
+        let db = db_from(">t\nMKVLLACDEFGHIKLMNPQRSTVWY\n");
+        let idx = KmerIndex::build(&db, 5);
+        let prof = crate::profile::Profile::from_msa_str(
+            ">q\nMKVLLACDEFGHIKLMNPQRSTVWY\n",
+            &m,
+            PseudoCountParams::default(),
+        )
+        .unwrap();
+        let mut p = PrefilterParams::default();
+        p.k = 6;
+        let _ = prefilter_profile(&prof, &db, &idx, p);
+    }
+
+    #[test]
+    fn synced_to_keeps_params_and_index_in_step() {
+        let m = SubstitutionMatrix::blosum62();
+        let db = db_from(">t\nMKVLLACDEFGHIKLMNPQRSTVWY\n");
+        let t = build_aa2num();
+        let q: Vec<u8> = "MKVLLACDEFGHIKLMNPQRSTVWY".bytes().map(|b| t[b as usize]).collect();
+
+        // contiguous index at a non-default k
+        let idx = KmerIndex::build(&db, 5);
+        let p = PrefilterParams::default().synced_to(&idx);
+        assert_eq!(p.k, 5);
+        let _ = prefilter_sequence(&q, &db, &idx, &m, p); // must not panic
+
+        // spaced seed: k is the mask's *weight*, not its span
+        let pattern = SeedPattern::from_mask("110101").unwrap();
+        let weight = pattern.weight();
+        let idx_s = KmerIndex::build_spaced(&db, pattern);
+        let ps = PrefilterParams::default().synced_to(&idx_s);
+        assert_eq!(ps.k, weight);
+        let _ = prefilter_sequence(&q, &db, &idx_s, &m, ps); // must not panic
     }
 
     #[test]

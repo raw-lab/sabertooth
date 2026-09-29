@@ -130,6 +130,7 @@ fn main() -> ExitCode {
         "easysearch" => run_easysearch(&args),
         "makedb" => run_makedb(&args),
         "convert2fasta" => run_convert2fasta(&args),
+        "profiledb2pssm" => run_profiledb2pssm(&args),
         "taxonomy" => run_taxonomy(&args),
         "calibrate" => run_calibrate(&args),
         other => {
@@ -194,6 +195,7 @@ COMMANDS:
   createdb <in.fasta> <out.fasta>        Validate + normalise a sequence FASTA
   makedb <in.fasta> <db_prefix>          Write an MMseqs2-format on-disk DB
   convert2fasta <db_prefix> [out.fasta]  Read an MMseqs2-format DB back to FASTA
+  profiledb2pssm <db_prefix>             Read an MMseqs2 profile DB (dbtype 2) as PSSM TSV
   msa2profile <msa>                      Build a PSSM from an MSA (a3m/aligned FASTA)
   result2msa <query.fasta> <target>      Search, then emit an a3m MSA per query
   search <query.fasta> <target.fasta>    Sequence-vs-sequence search
@@ -263,6 +265,7 @@ EXAMPLES:
   sabertooth cluster proteins.fasta --min-seq-id 0.5 --out clusters.tsv
   sabertooth easysearch queries.fasta small_db.fasta
   sabertooth makedb proteins.fasta protDB   # interoperable with `mmseqs`
+  sabertooth profiledb2pssm profDB          # reads `mmseqs msa2profile` output
   sabertooth taxonomy queries.fasta proteins.fasta --nodes nodes.dmp --names names.dmp --seqmap map.tsv
   sabertooth search q.fasta db.fasta --distributed --shards 8 --gpus 1 --hydra-gpus 4
 "#
@@ -851,6 +854,62 @@ fn run_profileprofile(args: &Args) -> Result<(), String> {
         args.positionals.len() - 1,
         results.len(),
         start.elapsed()
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// profiledb2pssm (read an MMseqs2 profile DB; mirrors `mmseqs profile2pssm`)
+// ---------------------------------------------------------------------------
+
+fn run_profiledb2pssm(args: &Args) -> Result<(), String> {
+    if args.positionals.is_empty() {
+        return Err("usage: sabertooth profiledb2pssm <profile_db_prefix> [out.tsv]".into());
+    }
+    let m = SubstitutionMatrix::blosum62();
+    let profiles = sabertooth::mmdb::read_profile_db(
+        std::path::Path::new(&args.positionals[0]),
+        &m,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // `mmseqs profile2pssm` dumps `profile_score / 4` (Sequence.cpp:334), with
+    // columns in NUM2AA order and a Cns (consensus) column. We reproduce it
+    // exactly so the two can be diffed.
+    let mut out = String::new();
+    for (i, (_name, p)) in profiles.iter().enumerate() {
+        out.push_str(&format!("Query profile of sequence {}\n", i));
+        out.push_str("Pos\tCns");
+        for a in 0..sabertooth::alphabet::PROFILE_AA_SIZE {
+            out.push('\t');
+            out.push(sabertooth::alphabet::NUM2AA[a] as char);
+        }
+        out.push('\n');
+        for col in 0..p.query_len {
+            out.push_str(&format!(
+                "{}\t{}",
+                col,
+                sabertooth::alphabet::NUM2AA[p.consensus[col] as usize] as char
+            ));
+            for a in 0..sabertooth::alphabet::PROFILE_AA_SIZE {
+                // C++ integer division truncates toward zero
+                let v = p.pssm[col * sabertooth::alphabet::PROFILE_AA_SIZE + a] as i32 / 4;
+                out.push_str(&format!("\t{}", v));
+            }
+            out.push('\n');
+        }
+    }
+    let dest = args
+        .positionals
+        .get(1)
+        .map(|s| s.as_str())
+        .or_else(|| args.opt_str("out"));
+    write_out(dest, &out)?;
+    let cols: usize = profiles.iter().map(|(_, p)| p.query_len).sum();
+    eprintln!(
+        "profiledb2pssm: {} profile(s), {} columns total (scores dumped as score/4)",
+        profiles.len(),
+        cols
     );
     Ok(())
 }
