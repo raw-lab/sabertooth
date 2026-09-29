@@ -367,8 +367,7 @@ edge-cases), and LCA taxonomy — run in **both debug and release**.
 
 # 📄 License
 
-**Creative Commons Attribution-NonCommercial (CC BY-NC 4.0)** — identical to
-upstream EpiVirQuant. Academic and non-commercial use is free; commercial
+**Creative Commons Attribution-NonCommercial (CC BY-NC 4.0)**. Academic and non-commercial use is free; commercial
 licensing inquiries → Richard Allen White III (`rwhit101@charlotte.edu`).
 See the `LICENSE` file for details.
 
