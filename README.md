@@ -368,9 +368,10 @@ edge-cases), and LCA taxonomy — run in **both debug and release**.
 
 # 📄 License
 
-**MIT** — see the [`LICENSE`](LICENSE) file. The optional `hydra-mpp-core` dependency is
-distributed under its own license (CC BY-NC 4.0) and is only pulled in with
-`--features distributed`.
+**Creative Commons Attribution-NonCommercial (CC BY-NC 4.0)** — identical to
+upstream EpiVirQuant. Academic and non-commercial use is free; commercial
+licensing inquiries → Richard Allen White III (`rwhit101@charlotte.edu`).
+See the `LICENSE` file for details.
 
 ---
 
