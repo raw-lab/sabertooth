@@ -1,0 +1,44 @@
+{
+ "tool": "diamond",
+ "db": "scale",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/tools/diamond",
+   "makedb",
+   "--in",
+   "/home/claude/bench_data/ds_scale/scale_db.fa",
+   "-d",
+   "/home/claude/bench_results/scale/dbs/dm_scale",
+   "--threads",
+   "2",
+   "--quiet"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 2.285718282000744,
+   "median": 2.285718282000744,
+   "max": 2.285718282000744,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 114118656,
+   "median": 114118656,
+   "max": 114118656
+  },
+  "runs": [
+   {
+    "wall_s": 2.285718282000744,
+    "exit": 0,
+    "peak_rss_bytes": 114118656,
+    "user_s": 3.107761,
+    "sys_s": 0.719521,
+    "minor_faults": 31554,
+    "major_faults": 5,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "db_bytes": 78422546
+}

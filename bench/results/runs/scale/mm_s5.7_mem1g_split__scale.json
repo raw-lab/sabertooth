@@ -1,0 +1,176 @@
+{
+ "run": "mm_s5.7_mem1g_split",
+ "tool": "mmseqs",
+ "version": "MMseqs2 8cc5ce367b5638c4306c2d7cfc652dd099a4643f",
+ "workload": "scale",
+ "database": "scale",
+ "args": [
+  "-s",
+  "5.7",
+  "--split-memory-limit",
+  "768M"
+ ],
+ "options": {
+  "cgroup": 1073741824,
+  "evict_db": true,
+  "no_index": true
+ },
+ "command": [
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/ds_scale/q_tune.fa",
+  "/home/claude/bench_results/scale/dbs/mmnoidx_scale",
+  "/home/claude/bench_results/scale/mm_s5.7_mem1g_split__scale.m8",
+  "/home/claude/bench_results/scale/tmp_mm_s5.7_mem1g_split__scale",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7",
+  "--split-memory-limit",
+  "768M"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "mm_s5.7_mem1g_split__scale",
+  "cmd": [
+   "/home/claude/tools/mmseqs/bin/mmseqs",
+   "easy-search",
+   "/home/claude/bench_data/ds_scale/q_tune.fa",
+   "/home/claude/bench_results/scale/dbs/mmnoidx_scale",
+   "/home/claude/bench_results/scale/mm_s5.7_mem1g_split__scale.m8",
+   "/home/claude/bench_results/scale/tmp_mm_s5.7_mem1g_split__scale",
+   "-e",
+   "10",
+   "--max-seqs",
+   "4000",
+   "--threads",
+   "2",
+   "-v",
+   "1",
+   "-s",
+   "5.7",
+   "--split-memory-limit",
+   "768M"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.04171858799963957,
+   "median": 0.04171858799963957,
+   "max": 0.04171858799963957,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 20176896,
+   "median": 20176896,
+   "max": 20176896
+  },
+  "runs": [
+   {
+    "wall_s": 0.04171858799963957,
+    "exit": 1,
+    "peak_rss_bytes": 20176896,
+    "user_s": 0.025759999999999998,
+    "sys_s": 0.014591999999999999,
+    "minor_faults": 3611,
+    "major_faults": 1,
+    "stderr_tail": "Cannot fit databases into 759M. Please use a computer with more main memory.\n",
+    "rep": 0,
+    "cgroup": {
+     "limit_bytes": 1073741824,
+     "max_usage_bytes": 17924096,
+     "failcnt": 0
+    }
+   }
+  ]
+ },
+ "db_build": {
+  "tool": "mmseqs",
+  "db": "scale",
+  "createdb": {
+   "label": "createdb",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createdb",
+    "/home/claude/bench_data/ds_scale/scale_db.fa",
+    "/home/claude/bench_results/scale/dbs/mm_scale",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "wall_s": {
+    "min": 1.0873483080013102,
+    "median": 1.0873483080013102,
+    "max": 1.0873483080013102,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 80470016,
+    "median": 80470016,
+    "max": 80470016
+   },
+   "runs": [
+    {
+     "wall_s": 1.0873483080013102,
+     "exit": 0,
+     "peak_rss_bytes": 80470016,
+     "user_s": 0.498334,
+     "sys_s": 0.619574,
+     "minor_faults": 28302,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "createindex": {
+   "label": "createindex",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createindex",
+    "/home/claude/bench_results/scale/dbs/mm_scale",
+    "/home/claude/bench_results/scale/dbs/mm_tmp_scale",
+    "--threads",
+    "2",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "wall_s": {
+    "min": 20.626439784000468,
+    "median": 20.626439784000468,
+    "max": 20.626439784000468,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 1400270848,
+    "median": 1400270848,
+    "max": 1400270848
+   },
+   "runs": [
+    {
+     "wall_s": 20.626439784000468,
+     "exit": 0,
+     "peak_rss_bytes": 1400270848,
+     "user_s": 26.007921,
+     "sys_s": 7.317232,
+     "minor_faults": 438328,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "db_bytes": 1544643595
+ },
+ "failed": {
+  "exit": 1,
+  "stderr_tail": "Cannot fit databases into 759M. Please use a computer with more main memory.\n"
+ }
+}

@@ -84,13 +84,13 @@ pub fn select_minimizers(seq: &[u8], k: usize, num: usize) -> Vec<u64> {
 /// Cluster a sequence database. Returns clusters; every sequence appears in
 /// exactly one cluster (singletons included).
 pub fn linclust(db: &SeqDb, mat: &SubstitutionMatrix, params: ClusterParams) -> Vec<Cluster> {
-    let n = db.records.len();
+    let n = db.len();
     let gaps = GapCosts::sequence_default();
 
     // 1. minimizer index: k-mer code -> sequences containing it
     let mut kmer_map: HashMap<u64, Vec<usize>> = HashMap::new();
-    for (sid, rec) in db.records.iter().enumerate() {
-        for code in select_minimizers(&rec.num, params.k, params.num_minimizers) {
+    for sid in 0..db.len() {
+        for code in select_minimizers(db.num(sid), params.k, params.num_minimizers) {
             kmer_map.entry(code).or_default().push(sid);
         }
     }
@@ -106,11 +106,11 @@ pub fn linclust(db: &SeqDb, mat: &SubstitutionMatrix, params: ClusterParams) -> 
         // centre = longest (ties: smallest id)
         let centre = *members
             .iter()
-            .max_by_key(|&&s| (db.records[s].num.len(), usize::MAX - s))
+            .max_by_key(|&&s| (db.seq_len(s), usize::MAX - s))
             .unwrap();
-        let clen = db.records[centre].num.len();
+        let clen = db.seq_len(centre);
         let sc = SeqScorer {
-            query: &db.records[centre].num,
+            query: db.num(centre),
             mat,
         };
         for &mem in members {
@@ -121,8 +121,8 @@ pub fn linclust(db: &SeqDb, mat: &SubstitutionMatrix, params: ClusterParams) -> 
             if !seen_pairs.insert((centre, mem)) {
                 continue;
             }
-            let mlen = db.records[mem].num.len();
-            if let Some(aln) = local_align(&sc, &db.records[mem].num, gaps) {
+            let mlen = db.seq_len(mem);
+            if let Some(aln) = local_align(&sc, db.num(mem), gaps) {
                 let ident = aln.pct_identity() / 100.0;
                 let cov = aln.aln_len as f64 / clen.min(mlen).max(1) as f64;
                 if ident >= params.min_seq_id && cov >= params.min_cov {
@@ -135,7 +135,7 @@ pub fn linclust(db: &SeqDb, mat: &SubstitutionMatrix, params: ClusterParams) -> 
     // 3. greedy set cover, longest-first: a sequence not yet assigned opens a
     //    cluster and absorbs its unassigned passing members.
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by_key(|&s| (usize::MAX - db.records[s].num.len(), s)); // longest first
+    order.sort_by_key(|&s| (usize::MAX - db.seq_len(s), s)); // longest first
     let mut assigned = vec![false; n];
     let mut clusters = Vec::new();
     for &s in &order {
@@ -198,7 +198,7 @@ mod tests {
         assert!(sizes.contains(&3), "expected a size-3 cluster, got {:?}", sizes);
         // every sequence assigned exactly once
         let total: usize = clusters.iter().map(|c| c.members.len()).sum();
-        assert_eq!(total, db.records.len());
+        assert_eq!(total, db.len());
         // z is a singleton
         assert!(clusters.iter().any(|c| c.members.len() == 1));
     }

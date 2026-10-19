@@ -1,0 +1,75 @@
+{
+ "tool": "sabertooth",
+ "db": "scope40",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/work/sabertooth/target/release/sabertooth",
+   "makedb",
+   "/home/claude/bench_data/ds/scope40.fa",
+   "/home/claude/bench_results/eval/dbs/st_scope40"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 0.028615214996534633,
+   "median": 0.028615214996534633,
+   "max": 0.028615214996534633,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 11530240,
+   "median": 11530240,
+   "max": 11530240
+  },
+  "runs": [
+   {
+    "wall_s": 0.028615214996534633,
+    "exit": 0,
+    "peak_rss_bytes": 11530240,
+    "user_s": 0.019628,
+    "sys_s": 0.0,
+    "minor_faults": 625,
+    "major_faults": 0,
+    "stderr_tail": "makedb: wrote 14323 sequences to /home/claude/bench_results/eval/dbs/st_scope40{,.index,.dbtype,_h,_h.index,.lookup,.source} (amino acid)\n  (sequence database only; build the seed index with `sabertooth createindex /home/claude/bench_results/eval/dbs/st_scope40`)\n",
+    "rep": 0
+   }
+  ]
+ },
+ "createindex": {
+  "label": "createindex",
+  "cmd": [
+   "/home/claude/work/sabertooth/target/release/sabertooth",
+   "createindex",
+   "/home/claude/bench_results/eval/dbs/st_scope40",
+   "--threads",
+   "2"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 0.35372235599788837,
+   "median": 0.35372235599788837,
+   "max": 0.35372235599788837,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 65282048,
+   "median": 65282048,
+   "max": 65282048
+  },
+  "runs": [
+   {
+    "wall_s": 0.35372235599788837,
+    "exit": 0,
+    "peak_rss_bytes": 65282048,
+    "user_s": 0.33182,
+    "sys_s": 0.080092,
+    "minor_faults": 18695,
+    "major_faults": 0,
+    "stderr_tail": "createindex: 14323 sequences, 2611087 residues -> /home/claude/bench_results/eval/dbs/st_scope40.stidx (2429660 postings, 2271827 distinct 6-mers, 85968 masked residues, 1 partition(s), 41.1 MiB) in 346.34ms; peak RSS 62.3 MiB\n",
+    "rep": 0
+   }
+  ]
+ },
+ "index_bytes": 43116824,
+ "db_bytes": 46682999
+}

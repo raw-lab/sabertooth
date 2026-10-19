@@ -1,19 +1,11 @@
 [package]
 name = "sabertooth"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
-authors = ["Richard Allen White III <rwhit101@uncc.edu>", "RAW Lab <github.com/raw-lab>"]
-description = "A pure-Rust reimplementation of the MMseqs2 profile/PSSM sensitivity core (search, clustering, taxonomy, translated & profile-profile search)."
-license = "CC-BY-NC-4.0"
-readme = "README.md"
-repository = "https://github.com/raw-lab/sabertooth"
-homepage = "https://github.com/raw-lab/sabertooth"
-keywords = ["bioinformatics", "mmseqs2", "alignment", "proteins", "homology"]
-categories = ["science", "command-line-utilities"]
-# Keep the published crate lean: dev-only reference scripts and scratch data are
-# not part of the library/binary.
-exclude = ["compare/", "STEPS.md", "*.tar.gz"]
+authors = ["RAW Lab <github.com/raw-lab>"]
+description = "Sabertooth — a pure-Rust reimplementation of the MMseqs2 profile/PSSM sensitivity core"
+license = "MIT"
 
 [[bin]]
 name = "sabertooth"
@@ -25,17 +17,25 @@ path = "src/lib.rs"
 
 [dependencies]
 rayon = "=1.10.0"
-# Optional distributed backend: RAW-lab HydraMPP, pulled from crates.io like any
-# other dependency. Off by default so the ordinary build stays dependency-light;
-# enable with `--features distributed`. Sabertooth remains a single crate.
-hydra-mpp-core = { version = "1.0.0", optional = true }
+# Streaming gzip FASTA input (pure-Rust miniz_oxide backend, no C toolchain).
+flate2 = { version = "=1.0.35", default-features = false, features = ["rust_backend"] }
+# Memory-mapped persistent seed index (bounded RSS: pages are file-backed).
+memmap2 = "=0.9.5"
+# Optional distributed backend (RAW-lab HydraMPP), vendored. Off by default so the
+# ordinary build stays dependency-light; enable with `--features distributed`.
+hydra-mpp-core = { path = "vendor/hydra-mpp-core", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+# Already a HydraMPP dependency; used to round-trip the wire types in tests.
+bincode = { version = "=1.3.3", optional = true }
+
+[dev-dependencies]
+flate2 = { version = "=1.0.35", default-features = false, features = ["rust_backend"] }
 
 [features]
 default = []
 # Distribute search across HydraMPP workers/nodes (also pulls in serde for the
 # task wire types). GPU-aware scheduling (`--gpus`) rides on this feature too.
-distributed = ["dep:hydra-mpp-core", "dep:serde"]
+distributed = ["dep:hydra-mpp-core", "dep:serde", "dep:bincode"]
 
 [profile.release]
 opt-level = 3

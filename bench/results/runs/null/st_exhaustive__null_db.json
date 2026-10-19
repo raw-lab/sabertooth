@@ -1,0 +1,205 @@
+{
+ "run": "st_exhaustive",
+ "tool": "sabertooth_exh",
+ "version": "Sabertooth v0.3.0 (easysearch: exhaustive Smith-Waterman, no prefilter)",
+ "workload": "null_db",
+ "database": "null",
+ "args": [],
+ "options": {},
+ "command": [
+  "/home/claude/work/sabertooth/target/release/sabertooth",
+  "easysearch",
+  "/home/claude/bench_data/ds/q_eval.fa",
+  "/home/claude/bench_data/ds/db_null.fa",
+  "--evalue",
+  "10",
+  "--max-hits",
+  "4000",
+  "--threads",
+  "2",
+  "--out",
+  "/home/claude/bench_results/null/st_exhaustive__null_db.m8",
+  "--stats-json",
+  "/home/claude/bench_results/null/st_exhaustive__null_db.stats.json"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "st_exhaustive__null_db",
+  "cmd": [
+   "/home/claude/work/sabertooth/target/release/sabertooth",
+   "easysearch",
+   "/home/claude/bench_data/ds/q_eval.fa",
+   "/home/claude/bench_data/ds/db_null.fa",
+   "--evalue",
+   "10",
+   "--max-hits",
+   "4000",
+   "--threads",
+   "2",
+   "--out",
+   "/home/claude/bench_results/null/st_exhaustive__null_db.m8",
+   "--stats-json",
+   "/home/claude/bench_results/null/st_exhaustive__null_db.stats.json"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 109.90391202399769,
+   "median": 109.90391202399769,
+   "max": 109.90391202399769,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 17047552,
+   "median": 17047552,
+   "max": 17047552
+  },
+  "runs": [
+   {
+    "wall_s": 109.90391202399769,
+    "exit": 0,
+    "peak_rss_bytes": 17047552,
+    "user_s": 207.130085,
+    "sys_s": 0.13599799999999998,
+    "minor_faults": 3993,
+    "major_faults": 0,
+    "stderr_tail": "easysearch (database-free, no prefilter index): 4000 queries x 14323 targets = 57292000 full SW alignments, 38840 hits in 109.90s\n",
+    "rep": 0
+   }
+  ]
+ },
+ "db_build": null,
+ "sabertooth_stats": {
+  "command": "easysearch",
+  "version": "0.3.0",
+  "plan": {
+   "budget_bytes": null,
+   "threads": 2,
+   "hit_block": 1048576,
+   "variant_cache_ranges": 524288,
+   "full_traceback_cells": 4194304,
+   "per_worker_scratch_estimate_bytes": 35651584,
+   "query_batch_seqs": 1024,
+   "query_batch_residues": 67108864,
+   "index_build_budget_bytes": 1073741824
+  },
+  "statistics_model": "calibrated gapped (BLOSUM62 11/1, comp-bias on) (lambda 0.3649, K 0.1076)",
+  "wall_s": {
+   "load": 0.012193,
+   "search": 109.884571,
+   "output": 0.0,
+   "total": 109.898682
+  },
+  "queries_per_s": 36.401835,
+  "per_query": {
+   "postings_visited": 0.0,
+   "candidates": 14323.0,
+   "gapped_alignments": 14323.0,
+   "tracebacks": 9.71,
+   "hits": 9.71
+  },
+  "counters": {
+   "queries": 4000,
+   "query_residues": 747684,
+   "windows": 0,
+   "windows_skipped_mask_or_x": 0,
+   "kmers_generated": 0,
+   "windows_at_kmer_cap": 0,
+   "exact_seeds_added": 0,
+   "variant_cache_hits": 0,
+   "variant_cache_misses": 0,
+   "index_lookups": 0,
+   "index_prefix_probes": 0,
+   "presence_bitmap_rejects": 0,
+   "seeds_with_postings": 0,
+   "postings_visited": 0,
+   "seeds_over_occ_cap": 0,
+   "postings_skipped_occ_cap": 0,
+   "target_blocks": 0,
+   "hit_buffer_peak_entries": 0,
+   "hit_buffer_peak_bytes": 0,
+   "hit_buffer_overruns": 0,
+   "targets_hit": 0,
+   "targets_evaluated": 0,
+   "diagonals_scored": 0,
+   "xdrop_extensions": 0,
+   "chains_used": 0,
+   "candidates": 57292000,
+   "candidates_capped": 0,
+   "gapped_scored": 57292000,
+   "gapped_cells": 1952267972508,
+   "scalar_fallbacks": 0,
+   "windowed": 0,
+   "window_expansions": 0,
+   "passed_score": 38840,
+   "tracebacks": 38840,
+   "rejected_coverage": 0,
+   "hits": 38840,
+   "score_mismatches": 0,
+   "profile_calibrations": 0,
+   "masked_scoring_positions": 7706,
+   "cpu_s_setup": 0.196719,
+   "cpu_s_prefilter": 0.215971,
+   "cpu_s_seed_generation": 0.0,
+   "cpu_s_hit_collection_sort": 0.0,
+   "cpu_s_diagonal_evidence": 0.0,
+   "cpu_s_gapped_scoring": 211.303234,
+   "cpu_s_traceback": 1.405124
+  },
+  "memory": {
+   "peak_rss_bytes": 17047552,
+   "seed_hit_buffer_peak_bytes": 0,
+   "minor_page_faults": 3990,
+   "major_page_faults": 0,
+   "user_cpu_s": 207.12,
+   "system_cpu_s": 0.13
+  }
+ },
+ "null": {
+  "queries": 4000,
+  "thresholds": [
+   {
+    "evalue": 0.0001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.0001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.001,
+    "hits": 5,
+    "per_query": 0.00125,
+    "expected_per_query": 0.001,
+    "observed_over_expected": 1.25
+   },
+   {
+    "evalue": 0.01,
+    "hits": 27,
+    "per_query": 0.00675,
+    "expected_per_query": 0.01,
+    "observed_over_expected": 0.6749999999999999
+   },
+   {
+    "evalue": 0.1,
+    "hits": 356,
+    "per_query": 0.089,
+    "expected_per_query": 0.1,
+    "observed_over_expected": 0.8899999999999999
+   },
+   {
+    "evalue": 1.0,
+    "hits": 3762,
+    "per_query": 0.9405,
+    "expected_per_query": 1.0,
+    "observed_over_expected": 0.9405
+   },
+   {
+    "evalue": 10.0,
+    "hits": 38840,
+    "per_query": 9.71,
+    "expected_per_query": 10.0,
+    "observed_over_expected": 0.9710000000000001
+   }
+  ]
+ }
+}

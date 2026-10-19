@@ -1,39 +1,74 @@
-//! K-mer prefiltering.
+//! K-mer prefilter: seeds → bounded, target-blocked hit aggregation →
+//! multi-diagonal ungapped / chained evidence → ranked candidates.
 //!
-//! Full Smith–Waterman against every target is wasteful; like MMseqs2, Sabertooth
-//! first seeds candidates with short k-mer matches and only aligns the survivors.
-//! Crucially, seeding is not limited to *exact* k-mers — for each query k-mer we
-//! also enumerate **similar** k-mers scoring above a threshold under the
-//! substitution matrix (sequence queries) or the PSSM (profile queries), using a
-//! branch-and-bound generator. This "similar-k-mer" expansion is what lets short
-//! seeds reach remote homologs, i.e. the sensitivity MMseqs2 is known for.
+//! ## Seeds
 //!
-//! The index maps a k-mer code to the `(target_id, position)` occurrences.
-//! Candidate targets are those hit by ≥ `min_hits` seeds; the dominant
-//! `target_pos − query_pos` diagonal is recorded for downstream banding/context.
+//! For every query window the generator emits **exactly the top
+//! `max_kmers_per_pos`** similar k-mers whose summed score (substitution matrix
+//! for sequence queries, PSSM for profiles) reaches `kmer_score` — ties at the
+//! boundary broken by a fixed rank order — so a per-window cap keeps the
+//! genuinely best seeds. (v0.2 used a depth-first traversal with locally
+//! sorted children; its first `cap` k-mers were not the global top `cap`.)
+//! The enumeration is depth-first with suffix-maximum pruning; when the cap is
+//! exceeded, one counting pass over partial-sum histograms gives the exact
+//! boundary score, after which only k-mers above it (plus the first ties) are
+//! kept (`top_kmers`; a best-first heap implementation serves as fallback and
+//! test oracle). For sequence queries the query's own (exact) k-mer is always
+//! seeded when it contains no `X` and no masked position, even if it is below
+//! the threshold or the cap is reached.
+//!
+//! Lookups go through a k-mer presence bitmap first; k-mers sharing their
+//! first `w − 1` residues are resolved by one bucket probe, and probes are
+//! software-pipelined with prefetches.
+//!
+//! ## Bounded hit processing
+//!
+//! v0.2 materialised every `(target, diagonal)` hit of a query and sorted the
+//! whole vector. Here posting lists (sorted by target) are consumed in **target
+//! blocks** sized so a block holds at most `hit_block` hits: each seed keeps a
+//! cursor into its posting list and a block takes the postings of targets in
+//! `[T_b, T_{b+1})`. A target's evidence therefore never straddles a block
+//! boundary — it is complete when its block is evaluated — and the hit buffer
+//! (reused across queries, per worker) stays bounded. A single target with more
+//! hits than `hit_block` grows the buffer and is counted as an overrun.
+//!
+//! ## Evidence per target
+//!
+//! Hits are grouped by diagonal; on the `max_diagonals` best-supported
+//! diagonals the ungapped segment around each seed is found by X-drop
+//! extension (`xdrop`, default 30 raw units; `--ungapped-xdrop 0` scores the
+//! best segment anywhere on the diagonal by Kadane instead), and pairs of
+//! segments that are co-linear in query and target are chained with an affine
+//! gap penalty, so an indel-split homolog is not reduced to its single most
+//! frequent diagonal.
+//! A target passes when its best single-segment or chained score reaches
+//! `min_diag_score`. Optional caps (`max_seed_occ`, `max_candidates`) are explicit
+//! sensitivity trade-offs and every time they bind it is counted in
+//! [`PrefilterStats`].
 
-use crate::alphabet::PROFILE_AA_SIZE;
+use crate::align::{GapCosts, ProfileScorer, ScoreTable, SeqScorer};
+use crate::alphabet::{ALPHABET_SIZE, PROFILE_AA_SIZE};
 use crate::fasta::SeqDb;
+use crate::index::SeedIndex;
+use crate::mask::MaskParams;
 use crate::matrix::SubstitutionMatrix;
 use crate::profile::Profile;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
+use std::time::Instant;
 
 /// Number of real residues used for k-mer coding.
 const A: u64 = PROFILE_AA_SIZE as u64; // 20
 
-/// Largest supported k-mer length. K-mers are packed into a base-20 `u64`
-/// code, so the hard limit is `20^k < 2^64` → k ≤ 14. We cap a little lower to
-/// leave headroom and because k > ~9 is not useful for protein sensitivity
-/// anyway. Requests outside `MIN_K..=MAX_K` are rejected with a clear error
-/// rather than silently overflowing the code (which is what a `u32` code did
-/// for k ≥ 8: `20^8 > 2^32`, wrapping to colliding codes with no diagnostic).
+/// Largest supported k-mer length (`20^12 < 2^64`; k > ~9 is not useful for
+/// protein sensitivity).
 pub const MAX_K: usize = 12;
 /// Smallest useful k-mer length.
 pub const MIN_K: usize = 2;
 
 /// Validate a requested k-mer length, returning a clear error if unsupported.
 pub fn check_k(k: usize) -> Result<(), String> {
-    if k < MIN_K || k > MAX_K {
+    if !(MIN_K..=MAX_K).contains(&k) {
         Err(format!(
             "k-mer length {} is out of the supported range {}..={} \
              (codes are packed into a base-20 u64)",
@@ -46,23 +81,16 @@ pub fn check_k(k: usize) -> Result<(), String> {
 
 /// A (possibly spaced) seed pattern. `offsets` are the positions within a window
 /// of length `span` that contribute residues to the k-mer code; `weight` is the
-/// number of such positions (the effective k). A contiguous seed has
-/// `offsets = 0..k` and `span == weight == k`.
-///
-/// Spaced seeds ("care/don't-care" masks like `110101`) improve remote-homology
-/// sensitivity: a mismatch that falls on a don't-care position doesn't destroy
-/// the seed, so diverged homologs still share exact spaced k-mers even when they
-/// share no contiguous k-mer of the same weight. The window always begins and
-/// ends on a care position so the seed's diagonal (`target_pos − query_pos`) is
-/// well defined at the window start.
-#[derive(Clone)]
+/// number of such positions (the effective k). The window always begins and ends
+/// on a care position so the seed diagonal is defined at the window start.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeedPattern {
     offsets: Vec<usize>,
     span: usize,
 }
 
 impl SeedPattern {
-    /// Contiguous seed of length `k` (`span == weight == k`).
+    /// Contiguous seed of length `k`.
     pub fn contiguous(k: usize) -> Self {
         SeedPattern {
             offsets: (0..k).collect(),
@@ -108,12 +136,13 @@ impl SeedPattern {
         self.span
     }
 
+    /// Care positions within the window.
     #[inline]
-    fn offsets(&self) -> &[usize] {
+    pub fn offsets(&self) -> &[usize] {
         &self.offsets
     }
 
-    /// Render back to a `0/1` mask (for `--info`/diagnostics).
+    /// Render back to a `0/1` mask.
     pub fn mask_string(&self) -> String {
         let mut m = vec![b'0'; self.span];
         for &o in &self.offsets {
@@ -124,448 +153,1148 @@ impl SeedPattern {
 }
 
 /// Map a sensitivity value (higher = more sensitive) to a similar-k-mer score
-/// threshold, mirroring MMseqs2's `-s`: a lower threshold admits more (weaker)
-/// seeds, reaching more remote homologs at higher cost. `scale` is the score bit
-/// factor (2 for sequence matrix scores, 8 for profile PSSM) so the threshold
-/// lands at the right magnitude for each. This is a monotone approximation of
-/// MMseqs2's target-k-mers-per-position heuristic, not an exact reproduction; the
-/// reference point `s ≈ 5.7` reproduces the built-in default threshold.
+/// threshold, mirroring MMseqs2's `-s` in spirit (monotone; `s ≈ 5.7`
+/// reproduces the default thresholds). `scale` is 2 for sequence scores and 8
+/// for PSSM scores.
 pub fn kmer_score_for_sensitivity(s: f64, scale: i32) -> i32 {
     let s = s.clamp(1.0, 9.0);
     let base = if scale >= 8 { 40.0 } else { 25.0 };
-    let per_unit = 0.75 * scale as f64; // 1.5 at ×2, 6.0 at ×8
+    let per_unit = 0.75 * scale as f64;
     let thr = base + (5.7 - s) * per_unit;
     thr.round().max(4.0) as i32
 }
 
-/// Prefilter configuration.
-#[derive(Clone, Copy)]
+/// Sequence-search sensitivity presets: `-s` → `(kmer_score, max_kmers,
+/// min_diag_score)`. Anchors are measured operating points on the SCOPe
+/// tuning split (see `bench/README.md`); values between anchors are
+/// interpolated (k-mer score linearly, cap geometrically, gate linearly).
+/// Lower k-mer thresholds generate more seeds (sensitivity); the higher
+/// ungapped gate keeps the extra random candidates out of gapped alignment.
+pub const SEQUENCE_PRESETS: [(f64, i32, usize, i32); 8] = [
+    (1.0, 26, 192, 30),
+    (2.0, 25, 256, 30),
+    (4.0, 24, 320, 30),
+    (5.7, 22, 512, 33),
+    (6.5, 21, 640, 33),
+    (7.5, 19, 1024, 34),
+    (8.5, 17, 1536, 36),
+    (9.0, 16, 2048, 38),
+];
+
+/// Interpolated sequence preset for sensitivity `s` (clamped to 1..9).
+pub fn sequence_preset(s: f64) -> (i32, usize, i32) {
+    let s = s.clamp(1.0, 9.0);
+    let t = &SEQUENCE_PRESETS;
+    let mut k = 0;
+    while k + 2 < t.len() && s > t[k + 1].0 {
+        k += 1;
+    }
+    let (s0, k0, c0, g0) = t[k];
+    let (s1, k1, c1, g1) = t[k + 1];
+    let f = ((s - s0) / (s1 - s0)).clamp(0.0, 1.0);
+    let kmer = (k0 as f64 + f * (k1 - k0) as f64).round() as i32;
+    let cap = ((c0 as f64).ln() + f * ((c1 as f64).ln() - (c0 as f64).ln())).exp();
+    let cap = ((cap / 32.0).round() as usize).max(1) * 32;
+    let gate = (g0 as f64 + f * (g1 - g0) as f64).round() as i32;
+    (kmer, cap, gate)
+}
+
+/// Prefilter configuration. One definition serves the CLI, the library and
+/// the distributed backend, so their defaults cannot drift apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "distributed", derive(serde::Serialize, serde::Deserialize))]
 pub struct PrefilterParams {
-    /// K-mer length (default 6, as in MMseqs2 for proteins).
+    /// K-mer length (seed weight).
     pub k: usize,
     /// Minimum summed score for a similar k-mer to be generated.
     pub kmer_score: i32,
-    /// Maximum similar k-mers generated per query position (bounds work).
+    /// Maximum similar k-mers generated per query window (best first).
     pub max_kmers_per_pos: usize,
-    /// Minimum number of seed hits for a target to become a candidate.
+    /// Minimum number of seed hits (any diagonal) for a target.
     pub min_hits: usize,
-    /// Minimum ungapped diagonal score for a target to survive the prefilter.
-    /// This cheap Kadane gate is what keeps the survivor set small (so the
-    /// expensive gapped alignment runs on few targets) without dropping real
-    /// homologs — mirroring MMseqs2's ungapped diagonal prefilter.
+    /// Minimum ungapped (single segment or chained) score for a target to
+    /// survive the prefilter, in raw score units.
     pub min_diag_score: i32,
+    /// Minimum seed hits on one diagonal (1 = a single hit suffices; 2 =
+    /// MMseqs2-style double hit).
+    pub diag_hits: usize,
+    /// Diagonals per target scored by ungapped extension.
+    pub max_diagonals: usize,
+    /// Keep at most this many candidates per query, best first (0 = all).
+    pub max_candidates: usize,
+    /// Skip k-mers whose posting list is longer than this (0 = never).
+    pub max_seed_occ: usize,
+    /// Always seed the query's own k-mer (sequence queries).
+    pub exact_seeds: bool,
+    /// Hits held per target block (bounds seed-hit working memory).
+    pub hit_block: usize,
+    /// Low-complexity masking of query seed windows.
+    pub mask: Option<MaskParams>,
+    /// Ungapped evidence per diagonal: `0` = best segment anywhere on the
+    /// diagonal (Kadane over its full length); `x > 0` = X-drop extension
+    /// (drop-off `x`, raw units) from each seed hit, so the cost is the
+    /// segment length rather than the diagonal length.
+    pub xdrop: i32,
+}
+
+impl PrefilterParams {
+    /// Sequence-search defaults (the CLI defaults).
+    pub fn sequence_default() -> Self {
+        // the `-s 5.7` preset
+        PrefilterParams {
+            k: 6,
+            kmer_score: 22,
+            max_kmers_per_pos: 512,
+            min_hits: 1,
+            min_diag_score: 33,
+            diag_hits: 1,
+            max_diagonals: 4,
+            max_candidates: 0,
+            max_seed_occ: 0,
+            exact_seeds: true,
+            hit_block: 1 << 20,
+            mask: None,
+            // X-drop evidence: −0.2% AUC1 vs whole-diagonal Kadane on the
+            // tuning split, ~1.7× faster evidence on a 68 M-residue database
+            xdrop: 30,
+        }
+    }
+
+    /// Profile-search defaults (the CLI defaults).
+    pub fn profile_default() -> Self {
+        PrefilterParams {
+            k: 5,
+            kmer_score: 40,
+            min_diag_score: 30,
+            exact_seeds: false,
+            ..Self::sequence_default()
+        }
+    }
+
+    /// Validate parameter combinations.
+    pub fn validate(&self) -> Result<(), String> {
+        check_k(self.k)?;
+        if self.max_kmers_per_pos == 0 {
+            return Err("--max-kmers must be at least 1".into());
+        }
+        if self.max_diagonals == 0 {
+            return Err("--prefilter-diags must be at least 1".into());
+        }
+        if self.diag_hits == 0 {
+            return Err("--diag-hits must be at least 1".into());
+        }
+        if self.hit_block < 1024 {
+            return Err("--hit-block must be at least 1024".into());
+        }
+        Ok(())
+    }
 }
 
 impl Default for PrefilterParams {
     fn default() -> Self {
-        PrefilterParams {
-            k: 6,
-            kmer_score: 25,
-            max_kmers_per_pos: 4096,
-            min_hits: 1,
-            min_diag_score: 0,
-        }
-    }
-}
-
-impl PrefilterParams {
-    /// Return a copy of these params with `k` taken from `index`'s seed weight.
-    ///
-    /// The index is authoritative for k-mer lookup, so this is the safe way to
-    /// pair params with an index that was built at a non-default `k` (or from a
-    /// spaced mask, where `k` is the mask's *weight*, not its span). Using it
-    /// makes the hard assertion in [`prefilter_sequence`] / [`prefilter_profile`]
-    /// unreachable.
-    pub fn synced_to(mut self, index: &KmerIndex) -> Self {
-        self.k = index.pattern().weight();
-        self
+        Self::sequence_default()
     }
 }
 
 /// A prefilter candidate: a target plus seeding evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Candidate {
     pub target_id: u32,
+    /// Seed hits on this target.
     pub hits: u32,
-    /// Most frequent diagonal `target_pos - query_pos` (as i64 to allow negative).
+    /// Diagonal (`target_pos − query_pos`) of the best ungapped segment.
     pub best_diag: i64,
-    /// Best ungapped segment score along `best_diag` (Kadane).
+    /// Prefilter score: best ungapped segment or chain (raw units).
     pub diag_score: i32,
+    /// Target region covered by the supporting segments (0-based, inclusive).
+    pub t_lo: u32,
+    pub t_hi: u32,
 }
 
-/// An inverted k-mer index over a target database.
-pub struct KmerIndex {
-    pattern: SeedPattern,
-    map: HashMap<u64, Vec<(u32, u32)>>, // kmer_code -> [(target_id, pos)]
+/// Counters for one or more prefilter runs (summable).
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "distributed", derive(serde::Serialize, serde::Deserialize))]
+pub struct PrefilterStats {
+    pub queries: u64,
+    pub windows: u64,
+    pub windows_skipped: u64,
+    pub kmers_generated: u64,
+    pub windows_at_cap: u64,
+    pub exact_seeds_added: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub lookups: u64,
+    pub prefix_probes: u64,
+    pub presence_rejects: u64,
+    pub seeds: u64,
+    pub postings_visited: u64,
+    pub seeds_over_occ_cap: u64,
+    pub postings_skipped_occ: u64,
+    pub blocks: u64,
+    pub hit_buffer_peak: u64,
+    pub hit_buffer_overruns: u64,
+    pub targets_hit: u64,
+    pub targets_evaluated: u64,
+    pub diagonals_scored: u64,
+    pub xdrop_extensions: u64,
+    pub chains_used: u64,
+    pub candidates: u64,
+    pub candidates_capped: u64,
+    pub ns_seeds: u64,
+    pub ns_hits: u64,
+    pub ns_evidence: u64,
 }
 
-impl KmerIndex {
-    /// Build a contiguous k-mer index of length `k`.
-    pub fn build(db: &SeqDb, k: usize) -> KmerIndex {
-        Self::build_spaced(db, SeedPattern::contiguous(k))
-    }
-
-    /// Build an index using an arbitrary (possibly spaced) seed pattern. Windows
-    /// containing an `X`/unknown residue at a care position are skipped (they
-    /// carry no specific signal). The recorded position is the window start, so
-    /// diagonals remain `target_pos − query_pos` at the seed's left edge.
-    pub fn build_spaced(db: &SeqDb, pattern: SeedPattern) -> KmerIndex {
-        debug_assert!(
-            (MIN_K..=MAX_K).contains(&pattern.weight()),
-            "seed weight {} outside supported range {}..={}; call check_k() first",
-            pattern.weight(),
-            MIN_K,
-            MAX_K
+impl PrefilterStats {
+    pub fn add(&mut self, o: &PrefilterStats) {
+        macro_rules! sum { ($($f:ident),*) => { $( self.$f += o.$f; )* } }
+        sum!(
+            queries, windows, windows_skipped, kmers_generated, windows_at_cap, exact_seeds_added,
+            cache_hits, cache_misses, lookups, prefix_probes, presence_rejects, seeds, postings_visited, seeds_over_occ_cap,
+            postings_skipped_occ, blocks, hit_buffer_overruns, targets_hit, targets_evaluated,
+            diagonals_scored, xdrop_extensions, chains_used, candidates, candidates_capped, ns_seeds, ns_hits, ns_evidence
         );
-        let span = pattern.span();
-        let mut map: HashMap<u64, Vec<(u32, u32)>> = HashMap::new();
-        for (tid, rec) in db.records.iter().enumerate() {
-            let s = &rec.num;
-            if s.len() < span {
-                continue;
-            }
-            for start in 0..=(s.len() - span) {
-                if let Some(code) = encode_spaced(&s[start..start + span], &pattern) {
-                    map.entry(code).or_default().push((tid as u32, start as u32));
-                }
-            }
-        }
-        KmerIndex { pattern, map }
-    }
-
-    pub fn distinct_kmers(&self) -> usize {
-        self.map.len()
-    }
-
-    /// The effective k (seed weight) this index was built with.
-    #[inline]
-    pub fn k(&self) -> usize {
-        self.pattern.weight()
-    }
-
-    /// The seed pattern this index was built with.
-    #[inline]
-    pub fn pattern(&self) -> &SeedPattern {
-        &self.pattern
-    }
-
-    /// Look up a k-mer's occurrences.
-    #[inline]
-    fn get(&self, code: u64) -> Option<&Vec<(u32, u32)>> {
-        self.map.get(&code)
+        self.hit_buffer_peak = self.hit_buffer_peak.max(o.hit_buffer_peak);
     }
 }
 
-/// Encode the care positions of a window (length `pattern.span`) into a base-20
-/// code. Returns `None` if any care position is not a real amino acid (>= 20).
-#[inline]
-fn encode_spaced(window: &[u8], pattern: &SeedPattern) -> Option<u64> {
-    let mut code = 0u64;
-    for &off in pattern.offsets() {
-        let r = window[off];
-        if r as u64 >= A {
-            return None;
-        }
-        code = code * A + r as u64;
+// ---------------------------------------------------------------------------
+// exact similar-k-mer enumeration (top `cap` per window)
+// ---------------------------------------------------------------------------
+
+/// Residues of one window position sorted by descending score (ties: residue).
+type SortedRow = [(i32, u8); PROFILE_AA_SIZE];
+
+fn sorted_row(row: &[i32; ALPHABET_SIZE]) -> SortedRow {
+    let mut v = [(0i32, 0u8); PROFILE_AA_SIZE];
+    for (r, slot) in v.iter_mut().enumerate() {
+        *slot = (row[r], r as u8);
     }
-    Some(code)
+    v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    v
 }
 
-/// Per-position scoring closure shared by seq/profile similar-k-mer generation.
+/// Reusable memory for [`top_kmers`].
+#[derive(Default)]
+struct KmerWork {
+    dist: Vec<u64>,
+    tmp: Vec<u64>,
+    heap: BinaryHeap<HeapItem>,
+}
+
+/// Score ranges wider than this (summed over the window) use the best-first
+/// fallback instead of the counting pass (never reached with `i8` matrices
+/// and PSSMs, whose summed range is at most `12 * 255`).
+const MAX_DP_RANGE: i64 = 1 << 16;
+
+/// The top-`cap` similar k-mers of one window.
 ///
-/// `col_scores[i]` gives, for query column `qstart + i`, the score of each of
-/// the 20 residues. The generator enumerates residue combinations whose summed
-/// score across the window meets the threshold.
-fn generate_similar_kmers(
-    col_scores: &[[i32; PROFILE_AA_SIZE]],
-    threshold: i32,
-    cap: usize,
-    out: &mut Vec<u64>,
-) {
-    let k = col_scores.len();
-
-    // Per-position residues sorted by ascending score. Pushing children in
-    // ascending order means the highest-scoring child sits on top of the stack
-    // and is popped first, giving a best-first traversal: the first `cap`
-    // k-mers emitted are (greedily) the top-scoring ones — which always includes
-    // the argmax-per-position k-mer (the strongest possible seed). This is what
-    // makes capping safe.
-    let mut order: Vec<[u8; PROFILE_AA_SIZE]> = vec![[0u8; PROFILE_AA_SIZE]; k];
-    for i in 0..k {
-        let mut idx: Vec<u8> = (0..PROFILE_AA_SIZE as u8).collect();
-        idx.sort_by_key(|&r| col_scores[i][r as usize]); // ascending
-        order[i].copy_from_slice(&idx);
-    }
-
-    // Suffix maxima: best achievable score from position i to end.
-    let mut suffix_max = vec![0i32; k + 1];
-    for i in (0..k).rev() {
-        let best = col_scores[i].iter().copied().max().unwrap_or(0);
-        suffix_max[i] = best + suffix_max[i + 1];
-    }
-
+/// Canonical order: score descending, then the rank vector (each position's
+/// residues ranked by score descending, residue ascending) lexicographically
+/// ascending. The returned **set** is exactly the first `cap` k-mers with
+/// score ≥ `threshold` in that order; the order of `out` is unspecified.
+/// Returns `true` iff more than `cap` k-mers reach the threshold.
+///
+/// Method: depth-first enumeration in rank-lexicographic order with exact
+/// suffix-maximum pruning (rows are sorted, so the first failing rank ends a
+/// level). While at most `cap` k-mers have been found nothing else happens.
+/// When the cap is exceeded, one counting pass over partial-sum histograms
+/// (exact `u64` counts) gives the boundary score `t*` (the cap-th best score)
+/// and the number of k-mers strictly above it; the collected list is reduced
+/// to those above `t*` plus the first ties in DFS order, and the remaining
+/// enumeration only accepts scores above `t*` (ties until the quota is full).
+/// Each window therefore visits at most `2·cap + 1` leaves, instead of
+/// paying a heap operation per emitted k-mer.
+fn top_kmers(rows: &[SortedRow], threshold: i32, cap: usize, work: &mut KmerWork, out: &mut Vec<(u64, i32)>) -> bool {
     out.clear();
-    // Iterative DFS with explicit stack: (depth, partial_code, partial_score).
-    let mut stack: Vec<(usize, u64, i32)> = vec![(0, 0, 0)];
-    while let Some((depth, code, score)) = stack.pop() {
-        if out.len() >= cap {
-            break;
-        }
-        if depth == k {
-            if score >= threshold {
-                out.push(code);
-            }
-            continue;
-        }
-        // Prune: even the best possible completion cannot reach threshold.
-        if score + suffix_max[depth] < threshold {
-            continue;
-        }
-        let base = code * A;
-        for &r in order[depth].iter() {
-            let ns = score + col_scores[depth][r as usize];
-            // Bound with suffix max of the *next* position.
-            if ns + suffix_max[depth + 1] >= threshold {
-                stack.push((depth + 1, base + r as u64, ns));
-            }
-        }
+    let w = rows.len();
+    if w == 0 || cap == 0 {
+        return false;
     }
-}
-
-/// Accumulate seed hits as a flat `(target_id, diagonal)` list.
-///
-/// The previous design kept a `HashMap<tid, (count, HashMap<diag, count>)>` — a
-/// per-target inner hash map allocated and probed on every single seed hit,
-/// which dominated prefilter time and allocation on large databases. Here each
-/// hit is one `push` into a contiguous vector; candidate reduction is a single
-/// sort plus a linear pass. Diagonals fit comfortably in `i32` (|diag| < max
-/// sequence length), so each hit is 8 bytes and stays cache-friendly.
-struct HitAccumulator {
-    hits: Vec<(u32, i32)>, // (target_id, diagonal = target_pos - query_pos)
-}
-
-impl HitAccumulator {
-    fn new() -> Self {
-        HitAccumulator { hits: Vec::new() }
+    assert!(w <= MAX_K, "seed weight {} exceeds {}", w, MAX_K);
+    let mut smax = [0i32; MAX_K + 1];
+    let mut range: i64 = 0;
+    for i in (0..w).rev() {
+        smax[i] = smax[i + 1] + rows[i][0].0;
+        range += (rows[i][0].0 - rows[i][PROFILE_AA_SIZE - 1].0) as i64;
     }
-
-    #[inline]
-    fn add(&mut self, index: &KmerIndex, code: u64, query_pos: usize) {
-        if let Some(list) = index.get(code) {
-            for &(tid, tpos) in list {
-                let diag = tpos as i32 - query_pos as i32;
-                self.hits.push((tid, diag));
-            }
-        }
+    if smax[0] < threshold {
+        return false;
     }
-
-    fn into_candidates(mut self, min_hits: usize) -> Vec<Candidate> {
-        if self.hits.is_empty() {
-            return Vec::new();
-        }
-        // Group by target, then by diagonal, in one sort.
-        self.hits.sort_unstable();
-        let mut cands: Vec<Candidate> = Vec::new();
-
-        let mut i = 0;
-        let n = self.hits.len();
-        while i < n {
-            let tid = self.hits[i].0;
-            // span of this target
-            let mut j = i;
-            while j < n && self.hits[j].0 == tid {
-                j += 1;
-            }
-            let group = &self.hits[i..j];
-            let total = group.len() as u32;
-
-            // most frequent diagonal within the (already diag-sorted) group
-            let mut best_diag = group[0].1;
-            let mut best_run = 0u32;
-            let mut run_diag = group[0].1;
-            let mut run = 0u32;
-            for &(_, d) in group {
-                if d == run_diag {
-                    run += 1;
-                } else {
-                    if run > best_run {
-                        best_run = run;
-                        best_diag = run_diag;
+    if range > MAX_DP_RANGE {
+        return top_kmers_heap(rows, threshold, cap, &mut work.heap, out);
+    }
+    let mut thr = threshold;
+    let mut capped = false;
+    let mut tstar = i32::MIN;
+    let mut ties_left: u64 = 0;
+    let last = w - 1;
+    let mut rank = [0u8; MAX_K];
+    let mut part = [0i32; MAX_K];
+    let mut code = [0u64; MAX_K];
+    let mut d = 0usize;
+    loop {
+        if d == last {
+            let base_s = part[last];
+            let base_c = code[last] * A;
+            for &(s, aa) in rows[last].iter() {
+                let ns = base_s + s;
+                if ns < thr {
+                    break;
+                }
+                out.push((base_c + aa as u64, ns));
+                if capped {
+                    if ns == tstar {
+                        // thr == tstar only while ties remain
+                        ties_left -= 1;
+                        if ties_left == 0 {
+                            thr = tstar + 1;
+                        }
                     }
-                    run_diag = d;
-                    run = 1;
+                } else if out.len() > cap {
+                    capped = true;
+                    let (t, above) = cap_boundary(rows, &smax[..=w], thr, cap, work);
+                    tstar = t;
+                    let need = cap as u64 - above;
+                    let mut kept = 0u64;
+                    out.retain(|&(_, sc)| {
+                        if sc > tstar {
+                            true
+                        } else if sc == tstar && kept < need {
+                            kept += 1;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    ties_left = need - kept;
+                    thr = if ties_left == 0 { tstar + 1 } else { tstar };
                 }
             }
-            if run > best_run {
-                best_diag = run_diag;
-            }
-
-            if total as usize >= min_hits {
-                cands.push(Candidate {
-                    target_id: tid,
-                    hits: total,
-                    best_diag: best_diag as i64,
-                    diag_score: 0,
-                });
-            }
-            i = j;
-        }
-
-        cands.sort_by(|a, b| b.hits.cmp(&a.hits));
-        cands
-    }
-}
-
-/// Best ungapped segment score (Kadane) along a diagonal, scoring a target
-/// against a per-query-column scoring closure. `diag = target_pos - query_pos`.
-#[inline]
-fn diagonal_kadane<F>(query_len: usize, target: &[u8], diag: i64, score_at: F) -> i32
-where
-    F: Fn(usize, u8) -> i32,
-{
-    let mut best = 0i32;
-    let mut cur = 0i32;
-    for qpos in 0..query_len {
-        let tpos = qpos as i64 + diag;
-        if tpos < 0 {
-            continue;
-        }
-        let tpos = tpos as usize;
-        if tpos >= target.len() {
-            break;
-        }
-        let s = score_at(qpos, target[tpos]);
-        cur = (cur + s).max(0);
-        if cur > best {
-            best = cur;
-        }
-    }
-    best
-}
-
-/// Apply the ungapped diagonal gate to a candidate list, filling `diag_score`
-/// and keeping those at or above `min_diag_score`, ranked by `diag_score`.
-fn gate_by_diagonal<F>(
-    mut cands: Vec<Candidate>,
-    query_len: usize,
-    db: &SeqDb,
-    min_diag_score: i32,
-    score_at: F,
-) -> Vec<Candidate>
-where
-    F: Fn(usize, u8) -> i32,
-{
-    for c in cands.iter_mut() {
-        let target = &db.records[c.target_id as usize].num;
-        c.diag_score = diagonal_kadane(query_len, target, c.best_diag, &score_at);
-    }
-    cands.retain(|c| c.diag_score >= min_diag_score);
-    cands.sort_by(|a, b| b.diag_score.cmp(&a.diag_score));
-    cands
-}
-
-/// Prefilter a plain sequence query against the index.
-///
-/// # Panics
-///
-/// Panics if `params.k` disagrees with the index's seed weight. The index is
-/// authoritative for k-mer lookup, so a mismatch means the caller's `params`
-/// describe a different seeding than the one actually performed — silently
-/// proceeding would produce input-dependent, wrong-by-configuration results.
-/// This is a hard assertion (not `debug_assert!`) precisely so it cannot be
-/// compiled out of a release build. Use [`PrefilterParams::synced_to`] to keep
-/// the two in step.
-pub fn prefilter_sequence(
-    query: &[u8],
-    db: &SeqDb,
-    index: &KmerIndex,
-    mat: &SubstitutionMatrix,
-    params: PrefilterParams,
-) -> Vec<Candidate> {
-    let pattern = index.pattern();
-    let w = pattern.weight();
-    let span = pattern.span();
-    assert_eq!(
-        w, params.k,
-        "prefilter index seed weight ({}) != params.k ({}); \
-         the index is authoritative — sync with PrefilterParams::synced_to(&index)",
-        w, params.k
-    );
-    let mut acc = HitAccumulator::new();
-    if query.len() < span {
-        return Vec::new();
-    }
-    let mut variants: Vec<u64> = Vec::new();
-    let mut col_scores = vec![[0i32; PROFILE_AA_SIZE]; w];
-    for start in 0..=(query.len() - span) {
-        // build per-care-position substitution scores for this window
-        let mut skip = false;
-        for (j, &off) in pattern.offsets().iter().enumerate() {
-            let qr = query[start + off];
-            if qr as usize >= PROFILE_AA_SIZE {
-                skip = true;
+            if last == 0 {
                 break;
             }
-            for r in 0..PROFILE_AA_SIZE {
-                col_scores[j][r] = mat.score(qr, r as u8);
+            d = last - 1;
+            rank[d] += 1;
+            continue;
+        }
+        let r = rank[d] as usize;
+        if r < PROFILE_AA_SIZE {
+            let (s, aa) = rows[d][r];
+            let ns = part[d] + s;
+            if ns + smax[d + 1] >= thr {
+                part[d + 1] = ns;
+                code[d + 1] = code[d] * A + aa as u64;
+                d += 1;
+                rank[d] = 0;
+                continue;
+            }
+        }
+        // level exhausted (later ranks score lower)
+        if d == 0 {
+            break;
+        }
+        d -= 1;
+        rank[d] += 1;
+    }
+    debug_assert!(!capped || out.len() == cap);
+    capped
+}
+
+/// Exact boundary of the top-`cap` list among k-mers scoring ≥ `thr`:
+/// `(t, above)` where `t` is the largest score with at least `cap` k-mers
+/// scoring ≥ `t` and `above` is the number scoring > `t` (< cap). Partial
+/// sums that cannot reach `thr` are pruned, so each histogram spans at most
+/// `max_score − thr + 1` bins. Requires at least `cap` k-mers ≥ `thr`.
+fn cap_boundary(rows: &[SortedRow], smax: &[i32], thr: i32, cap: usize, work: &mut KmerWork) -> (i32, u64) {
+    let KmerWork { dist, tmp, .. } = work;
+    dist.clear();
+    dist.push(1);
+    let (mut lo, mut hi) = (0i32, 0i32);
+    for (i, row) in rows.iter().enumerate() {
+        let nhi = hi + row[0].0;
+        let nlo = (lo + row[PROFILE_AA_SIZE - 1].0).max(thr.saturating_sub(smax[i + 1]));
+        debug_assert!(nlo <= nhi);
+        tmp.clear();
+        tmp.resize((nhi - nlo + 1) as usize, 0);
+        for (off, &cnt) in dist.iter().enumerate() {
+            if cnt == 0 {
+                continue;
+            }
+            let s = lo + off as i32;
+            for &(v, _) in row.iter() {
+                let t = s + v;
+                if t < nlo {
+                    break;
+                }
+                tmp[(t - nlo) as usize] += cnt;
+            }
+        }
+        std::mem::swap(dist, tmp);
+        lo = nlo;
+        hi = nhi;
+    }
+    let mut above = 0u64;
+    let mut t = hi;
+    loop {
+        let c = dist[(t - lo) as usize];
+        if above + c >= cap as u64 {
+            return (t, above);
+        }
+        above += c;
+        assert!(t > lo, "cap_boundary: fewer than cap k-mers reach the threshold");
+        t -= 1;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct HeapItem {
+    score: i32,
+    code: u64,
+    ranks: [u8; MAX_K],
+    last: u8,
+}
+
+impl Ord for HeapItem {
+    fn cmp(&self, o: &Self) -> Ordering {
+        // max-heap by score; ties: lexicographically smaller rank vector first
+        self.score.cmp(&o.score).then(o.ranks.cmp(&self.ranks))
+    }
+}
+
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
+/// Best-first (k-best sums) enumeration in the canonical order of
+/// [`top_kmers`]: emits up to `cap` k-mers with score ≥ `threshold`, in order.
+/// Every rank vector is generated once (children increment only coordinates
+/// ≥ the parent's last incremented one) and scores never increase along an
+/// increment, so the max-heap pops k-mers in global order. Used as the
+/// fallback for extreme score ranges and as the test oracle.
+fn top_kmers_heap(
+    rows: &[SortedRow],
+    threshold: i32,
+    cap: usize,
+    heap: &mut BinaryHeap<HeapItem>,
+    out: &mut Vec<(u64, i32)>,
+) -> bool {
+    out.clear();
+    heap.clear();
+    let w = rows.len();
+    let code_of = |ranks: &[u8; MAX_K]| -> u64 {
+        let mut c = 0u64;
+        for i in 0..w {
+            c = c * A + rows[i][ranks[i] as usize].1 as u64;
+        }
+        c
+    };
+    let ranks = [0u8; MAX_K];
+    let s0: i32 = rows.iter().map(|r| r[0].0).sum();
+    if s0 < threshold || cap == 0 {
+        return false;
+    }
+    heap.push(HeapItem {
+        score: s0,
+        code: code_of(&ranks),
+        ranks,
+        last: 0,
+    });
+    while let Some(it) = heap.pop() {
+        if out.len() >= cap {
+            return true;
+        }
+        out.push((it.code, it.score));
+        for j in it.last as usize..w {
+            let r = it.ranks[j] as usize;
+            if r + 1 >= PROFILE_AA_SIZE {
+                continue;
+            }
+            let ns = it.score - rows[j][r].0 + rows[j][r + 1].0;
+            if ns < threshold {
+                continue; // later ranks at j only score lower
+            }
+            let mut nr = it.ranks;
+            nr[j] += 1;
+            heap.push(HeapItem {
+                score: ns,
+                code: code_of(&nr),
+                ranks: nr,
+                last: j as u8,
+            });
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// per-worker scratch
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Seed {
+    qpos: u32,
+    cur: usize,
+    end: usize,
+}
+
+/// Reusable per-worker prefilter memory.
+pub struct PrefilterScratch {
+    rows: Vec<SortedRow>,
+    window_rows: Vec<SortedRow>,
+    kw: KmerWork,
+    kmers: Vec<(u64, i32)>,
+    seeds: Vec<Seed>,
+    hits: Vec<(u64, u32)>,
+    cands: Vec<Candidate>,
+    /// exact window code → (range in `cache_ranges`, at cap, k-mers generated)
+    /// (sequence queries only)
+    cache: HashMap<u64, (u32, u32, bool, u32)>,
+    /// resolved posting ranges of cached windows (k-mers present in the index)
+    cache_ranges: Vec<(usize, usize)>,
+    cache_key: (i32, usize),
+    /// Maximum cached posting ranges before the cache is reset (bounded memory).
+    pub cache_limit: usize,
+    /// The cache disables itself when its hit rate is too low to pay for the
+    /// copying (measured over the first `CACHE_PROBE` windows).
+    cache_enabled: bool,
+    cache_probe_windows: u64,
+    cache_probe_hits: u64,
+    /// per-prefix posting ranges (see [`SeedIndex::prefix_ranges`])
+    ranges: [(usize, usize); 20],
+    /// k-mer runs of the current window that need an index probe
+    runs: Vec<(u32, u32)>,
+}
+
+/// Windows over which the variant cache measures its hit rate.
+const CACHE_PROBE: u64 = 4096;
+/// Look-ahead distances (in probed runs) of the seed-lookup prefetches.
+const PF_BUCKET: usize = 8;
+const PF_ENTRY: usize = 4;
+
+impl Default for PrefilterScratch {
+    fn default() -> Self {
+        PrefilterScratch {
+            rows: Vec::new(),
+            window_rows: Vec::new(),
+            kw: KmerWork::default(),
+            kmers: Vec::new(),
+            seeds: Vec::new(),
+            hits: Vec::new(),
+            cands: Vec::new(),
+            cache: HashMap::new(),
+            cache_ranges: Vec::new(),
+            cache_key: (i32::MIN, 0),
+            cache_limit: 1 << 19,
+            cache_enabled: true,
+            cache_probe_windows: 0,
+            cache_probe_hits: 0,
+            ranges: [(0, 0); 20],
+            runs: Vec::new(),
+        }
+    }
+}
+
+impl PrefilterScratch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Bytes reserved (memory accounting).
+    pub fn heap_bytes(&self) -> usize {
+        self.rows.capacity() * std::mem::size_of::<SortedRow>()
+            + self.seeds.capacity() * std::mem::size_of::<Seed>()
+            + self.hits.capacity() * 16
+            + self.cands.capacity() * std::mem::size_of::<Candidate>()
+            + self.cache_ranges.capacity() * 16
+            + self.cache.capacity() * 32
+            + self.kmers.capacity() * 16
+            + (self.kw.dist.capacity() + self.kw.tmp.capacity()) * 8
+            + self.kw.heap.capacity() * std::mem::size_of::<HeapItem>()
+    }
+}
+
+/// Query description for the prefilter.
+pub struct PrefilterQuery<'a> {
+    /// Seeding scores per query column (`[col][residue]`).
+    pub seed_rows: &'a [[i32; ALPHABET_SIZE]],
+    /// Query residues for exact seeds and the variant cache (sequence queries).
+    pub residues: Option<&'a [u8]>,
+    /// Scores for ungapped extension (may include composition-bias correction).
+    pub ext_rows: &'a [[i32; ALPHABET_SIZE]],
+    /// Query columns excluded from seeding (low-complexity mask).
+    pub seed_mask: Option<&'a [bool]>,
+}
+
+/// Best ungapped segment on diagonal `d`: `(score, q_start, q_end)`.
+#[inline]
+fn kadane(rows: &[[i32; ALPHABET_SIZE]], t: &[u8], d: i64) -> (i32, usize, usize) {
+    let m = rows.len() as i64;
+    let n = t.len() as i64;
+    let q0 = (-d).max(0);
+    let q1 = m.min(n - d);
+    let (mut best, mut bs, mut be) = (0i32, 0usize, 0usize);
+    let (mut cur, mut cs) = (0i32, q0 as usize);
+    let mut q = q0;
+    while q < q1 {
+        let tr = t[(q + d) as usize] as usize;
+        let s = if tr < ALPHABET_SIZE { rows[q as usize][tr] } else { 0 };
+        if cur <= 0 {
+            cur = s;
+            cs = q as usize;
+        } else {
+            cur += s;
+        }
+        if cur > best {
+            best = cur;
+            bs = cs;
+            be = q as usize;
+        }
+        q += 1;
+    }
+    (best, bs, be)
+}
+
+/// Best ungapped segment on diagonal `d` that contains the seed starting at
+/// query position `qs0` (`span` residues), by X-drop extension in both
+/// directions: `(score, q_start, q_end)`.
+#[inline]
+fn xdrop_segment(rows: &[[i32; ALPHABET_SIZE]], t: &[u8], d: i64, qs0: usize, span: usize, x: i32) -> (i32, usize, usize) {
+    let m = rows.len() as i64;
+    let n = t.len() as i64;
+    let q_lo = (-d).max(0) as usize; // first query position on the diagonal
+    let q_hi = m.min(n - d) as usize; // one past the last
+    let sc = |q: usize| -> i32 {
+        let tr = t[(q as i64 + d) as usize] as usize;
+        if tr < ALPHABET_SIZE {
+            rows[q][tr]
+        } else {
+            0
+        }
+    };
+    let s_end = (qs0 + span).min(q_hi);
+    let mut seed = 0i32;
+    for q in qs0..s_end {
+        seed += sc(q);
+    }
+    // right
+    let (mut cur, mut best, mut be) = (seed, seed, s_end.saturating_sub(1).max(qs0));
+    let mut q = s_end;
+    while q < q_hi {
+        cur += sc(q);
+        if cur > best {
+            best = cur;
+            be = q;
+        } else if cur < best - x {
+            break;
+        }
+        q += 1;
+    }
+    // left (gain over the right-extended segment)
+    let (mut cur_l, mut best_l, mut bs) = (0i32, 0i32, qs0);
+    let mut q = qs0;
+    while q > q_lo {
+        q -= 1;
+        cur_l += sc(q);
+        if cur_l > best_l {
+            best_l = cur_l;
+            bs = q;
+        } else if cur_l < best_l - x {
+            break;
+        }
+    }
+    (best + best_l, bs, be)
+}
+
+/// Run the prefilter for one query. Candidates are returned best first
+/// (prefilter score descending, then target id ascending).
+pub fn prefilter_query(
+    q: &PrefilterQuery,
+    index: &SeedIndex,
+    params: &PrefilterParams,
+    gaps: GapCosts,
+    sc: &mut PrefilterScratch,
+    stats: &mut PrefilterStats,
+) -> Vec<Candidate> {
+    let pattern = index.pattern().clone();
+    assert_eq!(
+        pattern.weight(),
+        params.k,
+        "index seed weight {} does not match prefilter k {} (use PrefilterParams synced to the index)",
+        pattern.weight(),
+        params.k
+    );
+    let m = q.seed_rows.len();
+    let span = pattern.span();
+    stats.queries += 1;
+    sc.cands.clear();
+    if m < span || index.is_empty() {
+        return Vec::new();
+    }
+    let t_seed = Instant::now();
+    // ---- seeds -----------------------------------------------------------
+    sc.rows.clear();
+    sc.rows.extend(q.seed_rows.iter().map(sorted_row));
+    sc.seeds.clear();
+    let mut total_postings: usize = 0;
+    if q.residues.is_some() && sc.cache_key != (params.kmer_score, params.max_kmers_per_pos) {
+        sc.cache.clear();
+        sc.cache_ranges.clear();
+        sc.cache_key = (params.kmer_score, params.max_kmers_per_pos);
+        sc.cache_enabled = true;
+        sc.cache_probe_windows = 0;
+        sc.cache_probe_hits = 0;
+    }
+    let occ_cap = params.max_seed_occ;
+    let presence = index.presence();
+    #[inline]
+    fn push_seed(
+        seeds: &mut Vec<Seed>,
+        stats: &mut PrefilterStats,
+        total: &mut usize,
+        occ_cap: usize,
+        qpos: u32,
+        (a, b): (usize, usize),
+    ) {
+        let len = b - a;
+        if occ_cap > 0 && len > occ_cap {
+            stats.seeds_over_occ_cap += 1;
+            stats.postings_skipped_occ += len as u64;
+        } else {
+            seeds.push(Seed { qpos, cur: a, end: b });
+            *total += len;
+        }
+    }
+    for start in 0..=(m - span) {
+        stats.windows += 1;
+        // eligibility: no X (sequence) and no masked care position
+        let mut skip = false;
+        let mut exact: u64 = 0;
+        for &off in pattern.offsets() {
+            let c = start + off;
+            if let Some(mk) = q.seed_mask {
+                if mk[c] {
+                    skip = true;
+                    break;
+                }
+            }
+            if let Some(res) = q.residues {
+                let r = res[c];
+                if r as usize >= PROFILE_AA_SIZE {
+                    skip = true;
+                    break;
+                }
+                exact = exact * A + r as u64;
             }
         }
         if skip {
+            stats.windows_skipped += 1;
             continue;
         }
-        generate_similar_kmers(&col_scores, params.kmer_score, params.max_kmers_per_pos, &mut variants);
-        for &code in &variants {
-            acc.add(index, code, start);
-        }
-    }
-    let cands = acc.into_candidates(params.min_hits);
-    gate_by_diagonal(cands, query.len(), db, params.min_diag_score, |qpos, tr| {
-        mat.score(query[qpos], tr)
-    })
-}
-
-/// Prefilter a profile (PSSM) query against the index.
-///
-/// # Panics
-///
-/// Panics if `params.k` disagrees with the index's seed weight — see
-/// [`prefilter_sequence`] for why this is a hard assertion rather than a
-/// `debug_assert!`.
-pub fn prefilter_profile(
-    profile: &Profile,
-    db: &SeqDb,
-    index: &KmerIndex,
-    params: PrefilterParams,
-) -> Vec<Candidate> {
-    let pattern = index.pattern();
-    let w = pattern.weight();
-    let span = pattern.span();
-    assert_eq!(
-        w, params.k,
-        "prefilter index seed weight ({}) != params.k ({}); \
-         the index is authoritative — sync with PrefilterParams::synced_to(&index)",
-        w, params.k
-    );
-    let mut acc = HitAccumulator::new();
-    if profile.query_len < span {
-        return Vec::new();
-    }
-    let mut variants: Vec<u64> = Vec::new();
-    let mut col_scores = vec![[0i32; PROFILE_AA_SIZE]; w];
-    for start in 0..=(profile.query_len - span) {
-        for (j, &off) in pattern.offsets().iter().enumerate() {
-            for r in 0..PROFILE_AA_SIZE {
-                col_scores[j][r] = profile.pssm[(start + off) * PROFILE_AA_SIZE + r] as i32;
+        let qpos = start as u32;
+        let use_cache = q.residues.is_some() && sc.cache_enabled;
+        if use_cache {
+            if let Some(&(a, b, at_cap, nk)) = sc.cache.get(&exact) {
+                stats.cache_hits += 1;
+                sc.cache_probe_hits += 1;
+                if at_cap {
+                    stats.windows_at_cap += 1;
+                }
+                for k in a as usize..b as usize {
+                    let rg = sc.cache_ranges[k];
+                    push_seed(&mut sc.seeds, stats, &mut total_postings, occ_cap, qpos, rg);
+                }
+                stats.kmers_generated += nk as u64;
+                continue;
             }
         }
-        generate_similar_kmers(&col_scores, params.kmer_score, params.max_kmers_per_pos, &mut variants);
-        for &code in &variants {
-            acc.add(index, code, start);
+        sc.window_rows.clear();
+        for &off in pattern.offsets() {
+            sc.window_rows.push(sc.rows[start + off]);
+        }
+        let at_cap = top_kmers(&sc.window_rows, params.kmer_score, params.max_kmers_per_pos, &mut sc.kw, &mut sc.kmers);
+        if at_cap {
+            stats.windows_at_cap += 1;
+        }
+        // Resolve against the index in runs sharing the first w−1 residues
+        // (the generator emits k-mers grouped that way): a presence-bitmap test
+        // per k-mer, and one bucket probe per run that has a present k-mer.
+        let cache_a = sc.cache_ranges.len();
+        let nk = sc.kmers.len();
+        let mut have_exact = false;
+        // pass 1: the runs with at least one k-mer that may be present
+        sc.runs.clear();
+        let mut i = 0;
+        while i < nk {
+            let prefix = sc.kmers[i].0 / A;
+            let mut j = i;
+            let mut any = false;
+            while j < nk && sc.kmers[j].0 / A == prefix {
+                let c = sc.kmers[j].0;
+                have_exact |= c == exact;
+                if presence.may_contain(c) {
+                    any = true;
+                } else {
+                    stats.presence_rejects += 1;
+                }
+                j += 1;
+            }
+            if any {
+                sc.runs.push((i as u32, j as u32));
+            }
+            i = j;
+        }
+        // pass 2: probe them with a software-pipelined look-ahead (bucket
+        // entries PF_BUCKET runs ahead, k-mer table entries PF_ENTRY ahead) —
+        // the probes are independent random accesses into the index
+        let nr = sc.runs.len();
+        let run_prefix = |r: usize, kmers: &[(u64, i32)], runs: &[(u32, u32)]| kmers[runs[r].0 as usize].0 / A;
+        for r in 0..nr.min(PF_BUCKET) {
+            index.prefetch_prefix_bucket(run_prefix(r, &sc.kmers, &sc.runs));
+        }
+        for r in 0..nr {
+            if r + PF_BUCKET < nr {
+                index.prefetch_prefix_bucket(run_prefix(r + PF_BUCKET, &sc.kmers, &sc.runs));
+            }
+            if r + PF_ENTRY < nr {
+                index.prefetch_prefix_entries(run_prefix(r + PF_ENTRY, &sc.kmers, &sc.runs));
+            }
+            let (a, b) = sc.runs[r];
+            let prefix = sc.kmers[a as usize].0 / A;
+            let mask = index.prefix_ranges(prefix, &mut sc.ranges);
+            stats.prefix_probes += 1;
+            for k in a as usize..b as usize {
+                let c = sc.kmers[k].0;
+                let rr = (c % A) as usize;
+                if (mask >> rr) & 1 == 1 {
+                    let rg = sc.ranges[rr];
+                    push_seed(&mut sc.seeds, stats, &mut total_postings, occ_cap, qpos, rg);
+                    if use_cache {
+                        sc.cache_ranges.push(rg);
+                    }
+                }
+            }
+        }
+        stats.lookups += nk as u64;
+        let add_exact = q.residues.is_some() && params.exact_seeds && !have_exact;
+        if add_exact {
+            stats.exact_seeds_added += 1;
+            stats.lookups += 1;
+            stats.prefix_probes += 1;
+            let rg = index.posting_range(exact);
+            if rg.1 > rg.0 {
+                push_seed(&mut sc.seeds, stats, &mut total_postings, occ_cap, qpos, rg);
+                if use_cache {
+                    sc.cache_ranges.push(rg);
+                }
+            }
+        }
+        let generated = nk + add_exact as usize;
+        stats.kmers_generated += generated as u64;
+        if use_cache {
+            stats.cache_misses += 1;
+            sc.cache_probe_windows += 1;
+            if sc.cache_ranges.len() > sc.cache_limit {
+                // bounded memory: start over
+                sc.cache.clear();
+                sc.cache_ranges.clear();
+            } else {
+                let b = sc.cache_ranges.len() as u32;
+                sc.cache.insert(exact, (cache_a as u32, b, at_cap, generated as u32));
+            }
+            // too few repeats to pay for the bookkeeping: switch the cache off
+            if sc.cache_probe_windows >= CACHE_PROBE && sc.cache_probe_hits * 50 < sc.cache_probe_windows {
+                sc.cache_enabled = false;
+                sc.cache.clear();
+                sc.cache_ranges.clear();
+                sc.cache_ranges.shrink_to_fit();
+            }
         }
     }
-    let cands = acc.into_candidates(params.min_hits);
-    gate_by_diagonal(cands, profile.query_len, db, params.min_diag_score, |qpos, tr| {
-        profile.score(qpos, tr)
-    })
+    stats.seeds += sc.seeds.len() as u64;
+    stats.postings_visited += total_postings as u64;
+    stats.ns_seeds += t_seed.elapsed().as_nanos() as u64;
+    if sc.seeds.is_empty() {
+        return Vec::new();
+    }
+
+    // ---- hits, by target block ------------------------------------------
+    let n_targets = index.len() as u64;
+    let blocks = total_postings.div_ceil(params.hit_block).max(1) as u64;
+    let mut out: Vec<Candidate> = Vec::new();
+    let mut ns_hits = 0u64;
+    let mut ns_ev = 0u64;
+    for b in 0..blocks {
+        let t_lo = b * n_targets / blocks;
+        let t_hi = (b + 1) * n_targets / blocks;
+        if t_hi <= t_lo {
+            continue;
+        }
+        let th = Instant::now();
+        stats.blocks += 1;
+        sc.hits.clear();
+        let mb = m as i64;
+        for s in sc.seeds.iter_mut() {
+            let list = index.postings_in(s.cur, s.end);
+            let mut k = 0;
+            while k < list.len() {
+                let p = list[k];
+                let tid = p >> 32;
+                if tid >= t_hi {
+                    break;
+                }
+                let tpos = (p & 0xFFFF_FFFF) as i64;
+                let diag = tpos - s.qpos as i64;
+                sc.hits.push(((tid << 32) | (diag + mb) as u64, s.qpos));
+                k += 1;
+            }
+            s.cur += k;
+        }
+        let nh = sc.hits.len() as u64;
+        stats.hit_buffer_peak = stats.hit_buffer_peak.max(nh);
+        if nh as usize > params.hit_block {
+            stats.hit_buffer_overruns += 1;
+        }
+        sc.hits.sort_unstable();
+        ns_hits += th.elapsed().as_nanos() as u64;
+        let te = Instant::now();
+        evaluate_block(&sc.hits, q.ext_rows, index, params, gaps, mb, span, stats, &mut out);
+        ns_ev += te.elapsed().as_nanos() as u64;
+    }
+    stats.ns_hits += ns_hits;
+    stats.ns_evidence += ns_ev;
+
+    // ---- rank + optional candidate budget ---------------------------------
+    let order = |a: &Candidate, b: &Candidate| b.diag_score.cmp(&a.diag_score).then(a.target_id.cmp(&b.target_id));
+    if params.max_candidates > 0 && out.len() > params.max_candidates {
+        out.select_nth_unstable_by(params.max_candidates - 1, order);
+        stats.candidates_capped += (out.len() - params.max_candidates) as u64;
+        out.truncate(params.max_candidates);
+    }
+    out.sort_unstable_by(order);
+    stats.candidates += out.len() as u64;
+    out
+}
+
+#[derive(Clone, Copy, Default)]
+struct DiagRun {
+    diag: i64,
+    count: u32,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_block(
+    hits: &[(u64, u32)],
+    ext_rows: &[[i32; ALPHABET_SIZE]],
+    index: &SeedIndex,
+    params: &PrefilterParams,
+    gaps: GapCosts,
+    mb: i64,
+    span: usize,
+    stats: &mut PrefilterStats,
+    out: &mut Vec<Candidate>,
+) {
+    let kmax = params.max_diagonals;
+    let mut top: Vec<DiagRun> = Vec::with_capacity(kmax + 1);
+    let mut i = 0;
+    while i < hits.len() {
+        let tid = hits[i].0 >> 32;
+        let mut j = i;
+        while j < hits.len() && hits[j].0 >> 32 == tid {
+            j += 1;
+        }
+        stats.targets_hit += 1;
+        let group = &hits[i..j];
+        i = j;
+        // look-ahead: targets are visited in id order but their residues are
+        // scattered; fetch offsets 16 hits ahead and residues 8 hits ahead
+        if let Some(h) = hits.get(j + 16) {
+            index.prefetch_offset((h.0 >> 32) as usize);
+        }
+        if let Some(h) = hits.get(j + 8) {
+            let d = (h.0 & 0xFFFF_FFFF) as i64 - mb;
+            let tpos = (h.1 as i64 + d).max(0) as usize;
+            index.prefetch_residues((h.0 >> 32) as usize, tpos);
+        }
+        if group.len() < params.min_hits {
+            continue;
+        }
+        // top-k diagonals by support (count desc, diag asc)
+        top.clear();
+        let mut a = 0;
+        while a < group.len() {
+            let key = group[a].0;
+            let mut b = a;
+            while b < group.len() && group[b].0 == key {
+                b += 1;
+            }
+            let run = DiagRun {
+                diag: (key & 0xFFFF_FFFF) as i64 - mb,
+                count: (b - a) as u32,
+            };
+            a = b;
+            // insert keeping `top` sorted, size ≤ kmax
+            let pos = top
+                .iter()
+                .position(|t| run.count > t.count)
+                .unwrap_or(top.len());
+            if pos < kmax {
+                top.insert(pos, run);
+                if top.len() > kmax {
+                    top.pop();
+                }
+            }
+        }
+        if (top[0].count as usize) < params.diag_hits {
+            continue;
+        }
+        stats.targets_evaluated += 1;
+        let t = index.seq(tid as usize);
+        let mut segs: [(i32, usize, usize, i64); 16] = [(0, 0, 0, 0); 16];
+        let ns = top.len().min(16);
+        let mut best = (0i32, 0usize);
+        for (k, run) in top.iter().take(ns).enumerate() {
+            let (s, qs, qe) = if params.xdrop > 0 {
+                // extend from each seed of this diagonal not already covered
+                let key = (tid << 32) | (run.diag + mb) as u64;
+                let lo = group.partition_point(|h| h.0 < key);
+                let mut seg = (i32::MIN, 0usize, 0usize);
+                let mut covered_to: i64 = -1;
+                for h in group[lo..].iter().take_while(|h| h.0 == key) {
+                    let qp = h.1 as usize;
+                    if (qp as i64) <= covered_to {
+                        continue;
+                    }
+                    let r = xdrop_segment(ext_rows, t, run.diag, qp, span, params.xdrop);
+                    stats.xdrop_extensions += 1;
+                    covered_to = r.2 as i64;
+                    if r.0 > seg.0 {
+                        seg = r;
+                    }
+                }
+                seg
+            } else {
+                kadane(ext_rows, t, run.diag)
+            };
+            stats.diagonals_scored += 1;
+            segs[k] = (s, qs, qe, run.diag);
+            if s > best.0 {
+                best = (s, k);
+            }
+        }
+        // chains of two co-linear segments
+        let mut chain = (i32::MIN, 0usize, 0usize);
+        for x in 0..ns {
+            for y in 0..ns {
+                if x == y {
+                    continue;
+                }
+                let (sx, qsx, qex, dx) = segs[x];
+                let (sy, qsy, _qey, dy) = segs[y];
+                if sx <= 0 || sy <= 0 || dx == dy {
+                    continue;
+                }
+                let tex = qex as i64 + dx;
+                let tsy = qsy as i64 + dy;
+                if qex < qsy && tex < tsy {
+                    let g = gaps.cost((dy - dx).unsigned_abs() as usize);
+                    let c = sx + sy - g;
+                    if c > chain.0 {
+                        chain = (c, x, y);
+                    }
+                }
+                let _ = qsx;
+            }
+        }
+        let (score, used) = if chain.0 > best.0 {
+            stats.chains_used += 1;
+            (chain.0, [chain.1, chain.2])
+        } else {
+            (best.0, [best.1, best.1])
+        };
+        if score < params.min_diag_score {
+            continue;
+        }
+        let mut lo = u32::MAX;
+        let mut hi = 0u32;
+        for &u in &used {
+            let (_, qs, qe, d) = segs[u];
+            let ts = (qs as i64 + d).max(0) as u32;
+            let te = (qe as i64 + d).max(0) as u32;
+            lo = lo.min(ts);
+            hi = hi.max(te);
+        }
+        out.push(Candidate {
+            target_id: tid as u32,
+            hits: group.len() as u32,
+            best_diag: segs[best.1].3,
+            diag_score: score,
+            t_lo: lo,
+            t_hi: hi,
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// convenience wrappers (library API compatibility)
+// ---------------------------------------------------------------------------
+
+/// The seed index type (kept under its v0.2 name).
+pub type KmerIndex = SeedIndex;
+
+impl SeedIndex {
+    /// Build a transient contiguous-seed index over an in-memory database.
+    pub fn build(db: &SeqDb, k: usize) -> SeedIndex {
+        Self::build_spaced(db, SeedPattern::contiguous(k))
+    }
+
+    /// Build a transient index with an arbitrary seed pattern (no masking).
+    pub fn build_spaced(db: &SeqDb, pattern: SeedPattern) -> SeedIndex {
+        let opts = crate::index::BuildOptions::new(pattern);
+        SeedIndex::build_transient(db, &opts)
+            .expect("building a transient seed index failed")
+            .0
+    }
+}
+
+/// Seeding rows of a scorer.
+fn rows_of<S: crate::align::Scorer>(s: &S) -> Vec<[i32; ALPHABET_SIZE]> {
+    ScoreTable::from_scorer(s).rows().to_vec()
+}
+
+/// Prefilter a plain sequence query (no masking, no composition correction).
+pub fn prefilter_sequence(
+    query: &[u8],
+    _db: &SeqDb,
+    index: &SeedIndex,
+    mat: &SubstitutionMatrix,
+    params: PrefilterParams,
+) -> Vec<Candidate> {
+    let rows = rows_of(&SeqScorer { query, mat });
+    let q = PrefilterQuery {
+        seed_rows: &rows,
+        residues: Some(query),
+        ext_rows: &rows,
+        seed_mask: None,
+    };
+    let mut sc = PrefilterScratch::new();
+    let mut st = PrefilterStats::default();
+    prefilter_query(&q, index, &params, GapCosts::sequence_default(), &mut sc, &mut st)
+}
+
+/// Prefilter a profile (PSSM) query.
+pub fn prefilter_profile(profile: &Profile, _db: &SeqDb, index: &SeedIndex, params: PrefilterParams) -> Vec<Candidate> {
+    let rows = rows_of(&ProfileScorer { profile });
+    let q = PrefilterQuery {
+        seed_rows: &rows,
+        residues: None,
+        ext_rows: &rows,
+        seed_mask: None,
+    };
+    let mut sc = PrefilterScratch::new();
+    let mut st = PrefilterStats::default();
+    prefilter_query(&q, index, &params, GapCosts::profile_default(), &mut sc, &mut st)
 }
 
 #[cfg(test)]
@@ -580,85 +1309,163 @@ mod tests {
         SeqDb::from_reader(Cursor::new(fasta), &t).unwrap()
     }
 
+    fn enc(s: &str) -> Vec<u8> {
+        let t = build_aa2num();
+        s.bytes().map(|b| t[b as usize]).collect()
+    }
+
+    /// Rank vector of `code` (canonical tie order of `top_kmers`).
+    fn rank_vector(sorted: &[SortedRow], code: u64) -> Vec<u8> {
+        let w = sorted.len();
+        let mut digits = vec![0u8; w];
+        let mut x = code;
+        for i in (0..w).rev() {
+            digits[i] = (x % 20) as u8;
+            x /= 20;
+        }
+        (0..w)
+            .map(|i| sorted[i].iter().position(|&(_, r)| r == digits[i]).unwrap() as u8)
+            .collect()
+    }
+
+    #[test]
+    fn top_kmers_is_exact_global_order() {
+        // brute force over all 20^w k-mers for small w and random score rows,
+        // including narrow score ranges that produce many ties at the boundary
+        let mut rng = crate::evalue::SplitMix64::new(11);
+        let mut kw = KmerWork::default();
+        let mut capped_cases = 0;
+        for w in 2..=4usize {
+            for case in 0..40 {
+                let spread = if case % 2 == 0 { 15 } else { 4 };
+                let rows: Vec<[i32; ALPHABET_SIZE]> = (0..w)
+                    .map(|_| {
+                        let mut r = [0i32; ALPHABET_SIZE];
+                        for x in r.iter_mut() {
+                            *x = rng.below(spread) as i32 - (spread as i32) / 2;
+                        }
+                        r
+                    })
+                    .collect();
+                let sorted: Vec<SortedRow> = rows.iter().map(sorted_row).collect();
+                let thr = rng.below(10) as i32 - 3;
+                let mut all: Vec<(u64, i32)> = Vec::new();
+                for c in 0..20u64.pow(w as u32) {
+                    let mut x = c;
+                    let mut sc = 0;
+                    for i in (0..w).rev() {
+                        sc += rows[i][(x % 20) as usize];
+                        x /= 20;
+                    }
+                    if sc >= thr {
+                        all.push((c, sc));
+                    }
+                }
+                let canon = |v: &mut Vec<(u64, i32)>| {
+                    let mut keyed: Vec<(i32, Vec<u8>, u64, i32)> =
+                        v.iter().map(|&(c, s)| (-s, rank_vector(&sorted, c), c, s)).collect();
+                    keyed.sort_unstable();
+                    v.clear();
+                    v.extend(keyed.into_iter().map(|(_, _, c, s)| (c, s)));
+                };
+                canon(&mut all);
+                for cap in [1usize, 2, 5, 50, 333, 100000] {
+                    let want = &all[..all.len().min(cap)];
+                    // best-first oracle: exact canonical order
+                    let mut heap = BinaryHeap::new();
+                    let mut out_h = Vec::new();
+                    let at_cap_h = top_kmers_heap(&sorted, thr, cap, &mut heap, &mut out_h);
+                    assert_eq!(&out_h[..], want, "heap w={} thr={} cap={}", w, thr, cap);
+                    assert_eq!(at_cap_h, all.len() > cap);
+                    // depth-first + exact boundary: same set
+                    let mut out = Vec::new();
+                    let at_cap = top_kmers(&sorted, thr, cap, &mut kw, &mut out);
+                    canon(&mut out);
+                    assert_eq!(&out[..], want, "dfs w={} thr={} cap={}", w, thr, cap);
+                    assert_eq!(at_cap, all.len() > cap);
+                    capped_cases += at_cap as usize;
+                }
+            }
+        }
+        assert!(capped_cases > 100, "too few capped cases exercised: {}", capped_cases);
+    }
+
+    #[test]
+    fn top_kmers_matches_oracle_on_blosum_windows() {
+        // real matrix rows, k = 6, thresholds/caps used in practice
+        let m = SubstitutionMatrix::blosum62();
+        let mut rng = crate::evalue::SplitMix64::new(5);
+        let mut kw = KmerWork::default();
+        let mut heap = BinaryHeap::new();
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for _ in 0..300 {
+            let q: Vec<u8> = (0..6).map(|_| rng.below(20) as u8).collect();
+            let rows = rows_of(&SeqScorer { query: &q, mat: &m });
+            let sorted: Vec<SortedRow> = rows.iter().map(sorted_row).collect();
+            for (thr, cap) in [(25, 256), (18, 1024), (12, 64), (30, 8)] {
+                let ca = top_kmers(&sorted, thr, cap, &mut kw, &mut a);
+                let cb = top_kmers_heap(&sorted, thr, cap, &mut heap, &mut b);
+                assert_eq!(ca, cb);
+                a.sort_unstable();
+                b.sort_unstable();
+                assert_eq!(a, b, "query {:?} thr {} cap {}", q, thr, cap);
+            }
+        }
+    }
+
+    #[test]
+    fn old_dfs_generator_was_not_globally_ordered() {
+        // Documents the v0.2 defect: with a cap, depth-first emission (best child
+        // first) is not the global top list. Rows where position 0's runner-up
+        // combined with position 1's best beats position 0's best with position
+        // 1's runner-up.
+        let mut r0 = [-10i32; ALPHABET_SIZE];
+        r0[0] = 10;
+        r0[1] = 9;
+        let mut r1 = [-10i32; ALPHABET_SIZE];
+        r1[0] = 10;
+        r1[1] = 0;
+        let sorted = vec![sorted_row(&r0), sorted_row(&r1)];
+        let mut out = Vec::new();
+        top_kmers(&sorted, 0, 2, &mut KmerWork::default(), &mut out);
+        out.sort_unstable();
+        // global top-2: (0,0)=20, (1,0)=19 — DFS would give (0,0)=20, (0,1)=10
+        assert_eq!(out, vec![(0, 20), (20, 19)]); // codes 0·20+0 and 1·20+0
+    }
+
     #[test]
     fn exact_kmer_is_found() {
         let m = SubstitutionMatrix::blosum62();
         let db = db_from(">t1\nGGGGGMKVLLACDEFGHIKGGGG\n>t2\nPPPPPPPPPPPPPP\n");
         let idx = KmerIndex::build(&db, 6);
-        let t = build_aa2num();
-        let q: Vec<u8> = "MKVLLACDEFGHIK".bytes().map(|b| t[b as usize]).collect();
+        let q = enc("MKVLLACDEFGHIK");
         let cands = prefilter_sequence(&q, &db, &idx, &m, PrefilterParams::default());
         assert!(!cands.is_empty());
-        // t1 should be the top candidate
         assert_eq!(cands[0].target_id, 0);
     }
 
-    // The k invariant must hold in *every* build profile: a `debug_assert!` here
-    // was compiled out of release, letting a mismatched `params.k` be silently
-    // ignored in favour of the index's weight. These tests run under both
-    // `cargo test` and `cargo test --release`.
-
     #[test]
-    #[should_panic(expected = "index seed weight")]
-    fn mismatched_k_panics_in_sequence_prefilter() {
+    fn exact_seed_below_threshold_is_kept() {
+        // "AAAAAA" self-scores 24 < 25: only the exact-seed rule finds it
         let m = SubstitutionMatrix::blosum62();
-        let db = db_from(">t\nMKVLLACDEFGHIKLMNPQRSTVWY\n");
-        let idx = KmerIndex::build(&db, 5); // weight 5
-        let t = build_aa2num();
-        let q: Vec<u8> = "MKVLLACDEFGHIKLMNPQRSTVWY".bytes().map(|b| t[b as usize]).collect();
+        let db = db_from(">t\nWWWWAAAAAAWWWW\n");
+        let idx = KmerIndex::build(&db, 6);
+        let q = enc("AAAAAA");
         let mut p = PrefilterParams::default();
-        p.k = 6; // ...but params claim 6
-        let _ = prefilter_sequence(&q, &db, &idx, &m, p);
-    }
-
-    #[test]
-    #[should_panic(expected = "index seed weight")]
-    fn mismatched_k_panics_in_profile_prefilter() {
-        let m = SubstitutionMatrix::blosum62();
-        let db = db_from(">t\nMKVLLACDEFGHIKLMNPQRSTVWY\n");
-        let idx = KmerIndex::build(&db, 5);
-        let prof = crate::profile::Profile::from_msa_str(
-            ">q\nMKVLLACDEFGHIKLMNPQRSTVWY\n",
-            &m,
-            PseudoCountParams::default(),
-        )
-        .unwrap();
-        let mut p = PrefilterParams::default();
-        p.k = 6;
-        let _ = prefilter_profile(&prof, &db, &idx, p);
-    }
-
-    #[test]
-    fn synced_to_keeps_params_and_index_in_step() {
-        let m = SubstitutionMatrix::blosum62();
-        let db = db_from(">t\nMKVLLACDEFGHIKLMNPQRSTVWY\n");
-        let t = build_aa2num();
-        let q: Vec<u8> = "MKVLLACDEFGHIKLMNPQRSTVWY".bytes().map(|b| t[b as usize]).collect();
-
-        // contiguous index at a non-default k
-        let idx = KmerIndex::build(&db, 5);
-        let p = PrefilterParams::default().synced_to(&idx);
-        assert_eq!(p.k, 5);
-        let _ = prefilter_sequence(&q, &db, &idx, &m, p); // must not panic
-
-        // spaced seed: k is the mask's *weight*, not its span
-        let pattern = SeedPattern::from_mask("110101").unwrap();
-        let weight = pattern.weight();
-        let idx_s = KmerIndex::build_spaced(&db, pattern);
-        let ps = PrefilterParams::default().synced_to(&idx_s);
-        assert_eq!(ps.k, weight);
-        let _ = prefilter_sequence(&q, &db, &idx_s, &m, ps); // must not panic
+        p.kmer_score = 25;
+        p.min_diag_score = 1;
+        p.exact_seeds = false;
+        assert!(prefilter_sequence(&q, &db, &idx, &m, p).is_empty());
+        p.exact_seeds = true;
+        assert_eq!(prefilter_sequence(&q, &db, &idx, &m, p).len(), 1);
     }
 
     #[test]
     fn similar_kmer_reaches_diverged_target() {
         let m = SubstitutionMatrix::blosum62();
-        // target is a conservatively substituted version of the query
         let db = db_from(">t\nGGGGMKILLSCDEFGHLKGGGG\n");
         let idx = KmerIndex::build(&db, 6);
-        let t = build_aa2num();
-        let q: Vec<u8> = "MKVLLACDEFGHIK".bytes().map(|b| t[b as usize]).collect();
-        // lower threshold so conservative substitutions seed
+        let q = enc("MKVLLACDEFGHIK");
         let mut p = PrefilterParams::default();
         p.kmer_score = 15;
         let cands = prefilter_sequence(&q, &db, &idx, &m, p);
@@ -672,8 +1479,8 @@ mod tests {
         let prof = Profile::from_msa_str(msa, &m, PseudoCountParams::default()).unwrap();
         let db = db_from(">t\nGGGGMKVLLACDEFGHIKGGGG\n");
         let idx = KmerIndex::build(&db, 6);
-        let mut p = PrefilterParams::default();
-        p.kmer_score = 40; // PSSM scores are on the ×8 scale
+        let mut p = PrefilterParams::profile_default();
+        p.k = 6;
         let cands = prefilter_profile(&prof, &db, &idx, p);
         assert!(!cands.is_empty());
     }
@@ -688,26 +1495,129 @@ mod tests {
 
     #[test]
     fn long_kmers_do_not_collide_under_u64() {
-        // With the old u32 code, k=8 codes overflowed (20^8 > 2^32) and distinct
-        // k-mers collided. Under u64 they must remain distinct. Build an index of
-        // two different 8-mers and confirm two separate codes exist.
-        let db = db_from(">a\nACDEFGHIKLMNPQRSTVWY\n"); // 20 residues -> many 8-mers
+        let db = db_from(">a\nACDEFGHIKLMNPQRSTVWY\n");
         let idx = KmerIndex::build(&db, 8);
-        // number of distinct 8-mers in a 20-length window = 20-8+1 = 13, all unique
         assert_eq!(idx.distinct_kmers(), 13);
     }
 
     #[test]
     fn diagonal_mode_is_selected() {
-        // Two seeds on one diagonal, one on another → best_diag is the common one.
         let m = SubstitutionMatrix::blosum62();
-        let db = db_from(">t\nMKVLLACDEFGHIKMKVLLAC\n"); // repeated motif
+        let db = db_from(">t\nMKVLLACDEFGHIKMKVLLAC\n");
         let idx = KmerIndex::build(&db, 6);
-        let t = build_aa2num();
-        let q: Vec<u8> = "MKVLLACDEFGHIK".bytes().map(|b| t[b as usize]).collect();
+        let q = enc("MKVLLACDEFGHIK");
         let cands = prefilter_sequence(&q, &db, &idx, &m, PrefilterParams::default());
         assert!(!cands.is_empty());
         assert!(cands[0].diag_score > 0);
+        assert_eq!(cands[0].best_diag, 0);
+    }
+
+    #[test]
+    fn second_diagonal_and_chain_rescue_indel_split_homolog() {
+        // Target: a repeat of a short query motif on a wrong diagonal (most
+        // frequent), plus the real homology split by a 4-residue insertion.
+        // The most-frequent-diagonal rule (v0.2) scores only the repeat.
+        let m = SubstitutionMatrix::blosum62();
+        let q = "MKVLLACDEFGHIKLMNPQRSTVWYHHHHWWCCMM";
+        let t = format!("{}{}{}", "QRSTQRSTQRSTQRSTQRSTQRSTQRST", "MKVLLACDEFGHIKLMNP", "GGGGQRSTVWYHHHHWWCCMM");
+        let db = db_from(&format!(">t\n{}\n", t));
+        let idx = KmerIndex::build(&db, 4);
+        let mut p = PrefilterParams::default();
+        p.k = 4;
+        p.kmer_score = 18;
+        let qn = enc(q);
+        let mut p1 = p;
+        p1.max_diagonals = 1;
+        let one = prefilter_sequence(&qn, &db, &idx, &m, p1);
+        let four = prefilter_sequence(&qn, &db, &idx, &m, p);
+        assert_eq!(four.len(), 1);
+        assert!(four[0].diag_score > one.first().map(|c| c.diag_score).unwrap_or(0));
+    }
+
+    #[test]
+    fn target_blocks_give_identical_candidates() {
+        let m = SubstitutionMatrix::blosum62();
+        let mut rng = crate::evalue::SplitMix64::new(4);
+        let aa = b"ACDEFGHIKLMNPQRSTVWY";
+        let core: String = (0..80).map(|_| aa[rng.below(20)] as char).collect();
+        let mut fasta = String::new();
+        for i in 0..400 {
+            let mut s: Vec<u8> = core.bytes().collect();
+            for _ in 0..(i % 30) {
+                let p = rng.below(s.len());
+                s[p] = aa[rng.below(20)];
+            }
+            let pre: String = (0..rng.below(50)).map(|_| aa[rng.below(20)] as char).collect();
+            fasta.push_str(&format!(">s{}\n{}{}\n", i, pre, String::from_utf8(s).unwrap()));
+        }
+        let db = db_from(&fasta);
+        let idx = KmerIndex::build(&db, 5);
+        let rows = rows_of(&SeqScorer { query: &enc(&core), mat: &m });
+        let qn = enc(&core);
+        let q = PrefilterQuery { seed_rows: &rows, residues: Some(&qn), ext_rows: &rows, seed_mask: None };
+        let mut p = PrefilterParams::default();
+        p.k = 5;
+        p.kmer_score = 18;
+        let mut big = PrefilterStats::default();
+        let mut small = PrefilterStats::default();
+        let a = prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut PrefilterScratch::new(), &mut big);
+        p.hit_block = 1024;
+        let b = prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut PrefilterScratch::new(), &mut small);
+        assert!(small.blocks > 4, "expected several target blocks, got {}", small.blocks);
+        assert_eq!(big.blocks, 1);
+        assert!(small.hit_buffer_peak < big.hit_buffer_peak);
+        assert_eq!(a, b);
+        // caps are counted
+        p.max_candidates = 10;
+        let mut st = PrefilterStats::default();
+        let c = prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut PrefilterScratch::new(), &mut st);
+        assert_eq!(c.len(), 10);
+        assert_eq!(st.candidates_capped as usize, a.len() - 10);
+        assert_eq!(&c[..], &a[..10]);
+        p.max_candidates = 0;
+        p.max_seed_occ = 3;
+        let mut st = PrefilterStats::default();
+        prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut PrefilterScratch::new(), &mut st);
+        assert!(st.seeds_over_occ_cap > 0 && st.postings_skipped_occ > 0);
+    }
+
+    #[test]
+    fn query_mask_removes_low_complexity_seeds() {
+        let m = SubstitutionMatrix::blosum62();
+        let db = db_from(&format!(">lc\nMMMM{}MMMM\n", "Q".repeat(40)));
+        let idx = KmerIndex::build(&db, 6);
+        let qn = enc(&format!("WWWW{}WWWW", "Q".repeat(40)));
+        let rows = rows_of(&SeqScorer { query: &qn, mat: &m });
+        let mask = crate::mask::low_complexity_mask(&qn, MaskParams::default());
+        let unmasked = PrefilterQuery { seed_rows: &rows, residues: Some(&qn), ext_rows: &rows, seed_mask: None };
+        let masked = PrefilterQuery { seed_rows: &rows, residues: Some(&qn), ext_rows: &rows, seed_mask: Some(&mask) };
+        let p = PrefilterParams::default();
+        let g = GapCosts::sequence_default();
+        let mut s1 = PrefilterStats::default();
+        let mut s2 = PrefilterStats::default();
+        assert!(!prefilter_query(&unmasked, &idx, &p, g, &mut PrefilterScratch::new(), &mut s1).is_empty());
+        assert!(prefilter_query(&masked, &idx, &p, g, &mut PrefilterScratch::new(), &mut s2).is_empty());
+        assert!(s2.windows_skipped > 30);
+    }
+
+    #[test]
+    fn variant_cache_does_not_change_results() {
+        let m = SubstitutionMatrix::blosum62();
+        let db = db_from(">a\nMKVLLACDEFGHIKMKVLLACDEFGHIK\n>b\nGGGMKVLLACDEFGG\n");
+        let idx = KmerIndex::build(&db, 5);
+        let qn = enc("MKVLLACDEFGHIKMKVLLACDEFGHIK"); // repeated windows hit the cache
+        let rows = rows_of(&SeqScorer { query: &qn, mat: &m });
+        let q = PrefilterQuery { seed_rows: &rows, residues: Some(&qn), ext_rows: &rows, seed_mask: None };
+        let mut p = PrefilterParams::default();
+        p.k = 5;
+        let mut sc = PrefilterScratch::new();
+        let mut st = PrefilterStats::default();
+        let a = prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut sc, &mut st);
+        assert!(st.cache_hits > 0);
+        let mut off = PrefilterScratch::new();
+        off.cache_enabled = false;
+        let b = prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut off, &mut PrefilterStats::default());
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -716,9 +1626,9 @@ mod tests {
         assert_eq!(p.weight(), 5);
         assert_eq!(p.span(), 7);
         assert_eq!(p.mask_string(), "1101011");
-        assert!(SeedPattern::from_mask("0110").is_err()); // must start with 1
-        assert!(SeedPattern::from_mask("1100").is_err()); // must end with 1
-        assert!(SeedPattern::from_mask("11x1").is_err()); // only 0/1
+        assert!(SeedPattern::from_mask("0110").is_err());
+        assert!(SeedPattern::from_mask("1100").is_err());
+        assert!(SeedPattern::from_mask("11x1").is_err());
         assert!(SeedPattern::from_mask("").is_err());
         let c = SeedPattern::contiguous(6);
         assert_eq!(c.weight(), 6);
@@ -727,55 +1637,121 @@ mod tests {
 
     #[test]
     fn spaced_seed_finds_what_contiguous_misses() {
-        // Target is exactly the diverged seed window: the query's 7-residue window
-        // with a single substitution at the position the spaced mask ignores. The
-        // spaced seed matches it exactly; no contiguous weight-6 window matches
-        // (the mismatch falls inside every contiguous 6-mer), so at a threshold
-        // that admits the exact spaced self-match but not the substituted variant,
-        // contiguous seeding misses while spaced succeeds.
         let m = SubstitutionMatrix::blosum62();
-        let t = build_aa2num();
-        let qs = "MKVLLACDEFGHIK"; // window at start 3 = indices 3..9 = "LLACDEF"
-        let q: Vec<u8> = qs.bytes().map(|b| t[b as usize]).collect();
-        // "LLACDEF" with index-5-of-window (E) -> P: the don't-care column
+        let q = enc("MKVLLACDEFGHIK");
         let db = db_from(">tgt\nLLACDPF\n");
-
         let mut strict = PrefilterParams::default();
-        strict.kmer_score = 30; // admits exact self-match (~33), not the E->P variant (~26)
+        strict.kmer_score = 30;
         strict.min_diag_score = 1;
-
-        // contiguous weight-6
+        strict.exact_seeds = false;
         strict.k = 6;
         let idx_c = KmerIndex::build(&db, 6);
         let c_cont = prefilter_sequence(&q, &db, &idx_c, &m, strict);
-        assert!(
-            !c_cont.iter().any(|c| c.diag_score > 0),
-            "contiguous seed should miss the don't-care substitution here"
-        );
-
-        // spaced weight-6 with the don't-care ('0') at window offset 5
+        assert!(!c_cont.iter().any(|c| c.diag_score > 0), "contiguous seed should miss");
         let pattern = SeedPattern::from_mask("1111101").unwrap();
-        assert_eq!(pattern.weight(), 6);
         strict.k = pattern.weight();
         let idx_s = KmerIndex::build_spaced(&db, pattern);
         let c_spaced = prefilter_sequence(&q, &db, &idx_s, &m, strict);
-        assert!(
-            c_spaced.iter().any(|c| c.diag_score > 0),
-            "spaced seed should find the diverged target"
-        );
+        assert!(c_spaced.iter().any(|c| c.diag_score > 0), "spaced seed should find the diverged target");
     }
 
     #[test]
     fn sensitivity_lowers_threshold_monotonically() {
-        // Higher sensitivity -> lower (or equal) k-mer score threshold.
         let mut prev = i32::MAX;
         for i in 1..=9 {
-            let s = i as f64;
-            let thr = kmer_score_for_sensitivity(s, 2);
-            assert!(thr <= prev, "threshold must be non-increasing in s");
+            let thr = kmer_score_for_sensitivity(i as f64, 2);
+            assert!(thr <= prev);
             prev = thr;
         }
-        // profile scale (×8) thresholds are larger than sequence scale (×2)
         assert!(kmer_score_for_sensitivity(5.7, 8) > kmer_score_for_sensitivity(5.7, 2));
+    }
+
+    #[test]
+    fn presets_are_monotone_and_default_is_s57() {
+        let mut prev = (i32::MAX, 0usize);
+        for i in 0..=80 {
+            let s = 1.0 + i as f64 * 0.1;
+            let (k, c, g) = sequence_preset(s);
+            assert!(k <= prev.0 && c >= prev.1, "s={} -> {:?}", s, (k, c, g));
+            assert!(c % 32 == 0 && g >= 30);
+            prev = (k, c);
+        }
+        for &(s, k, c, g) in SEQUENCE_PRESETS.iter() {
+            assert_eq!(sequence_preset(s), (k, c, g));
+        }
+        let d = PrefilterParams::sequence_default();
+        assert_eq!(sequence_preset(5.7), (d.kmer_score, d.max_kmers_per_pos, d.min_diag_score));
+    }
+
+    #[test]
+    fn defaults_are_shared_and_valid() {
+        assert_eq!(PrefilterParams::default(), PrefilterParams::sequence_default());
+        PrefilterParams::sequence_default().validate().unwrap();
+        PrefilterParams::profile_default().validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod microbench {
+    use super::*;
+    use crate::alphabet::build_aa2num;
+
+    /// `cargo test --release microbench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn microbench_enumeration_vs_lookup() {
+        let m = SubstitutionMatrix::blosum62();
+        let path = std::env::var("ST_BENCH_INDEX").unwrap_or_default();
+        if path.is_empty() {
+            eprintln!("set ST_BENCH_INDEX=<file.stidx>");
+            return;
+        }
+        let idx = SeedIndex::open(std::path::Path::new(&path)).unwrap();
+        let t = build_aa2num();
+        let q: Vec<u8> = "MADENKLKLGSGSFGEVFLVKHKESGNIYAMKKIRLEVEEEGVPSTAIREISLLKELKHENIVRLYDVVHSDKKLTLVFEYLDKDLKKYMDSCPEFAKDPRLIKMFLYQILRGLAYCHRRKVLHRDLKPQNLLIDRRTNSLKLADFGLARAFGVPLRTYTHEVVTLWYRAPEILLG".bytes().map(|b| t[b as usize]).collect();
+        let rows = rows_of(&SeqScorer { query: &q, mat: &m });
+        let sorted: Vec<SortedRow> = rows.iter().map(sorted_row).collect();
+        let mut heap = BinaryHeap::new();
+        let mut kw = KmerWork::default();
+        let mut out = Vec::new();
+        for (thr, cap) in [(25, 256), (18, 1024), (15, 4096)] {
+            let mut codes = Vec::new();
+            let mut n = 0usize;
+            let t0 = std::time::Instant::now();
+            for _ in 0..20 {
+                for st in 0..q.len() - 6 {
+                    top_kmers_heap(&sorted[st..st + 6], thr, cap, &mut heap, &mut out);
+                    n += out.len();
+                }
+            }
+            let th = t0.elapsed();
+            let mut n2 = 0usize;
+            let t0 = std::time::Instant::now();
+            for _ in 0..20 {
+                for st in 0..q.len() - 6 {
+                    top_kmers(&sorted[st..st + 6], thr, cap, &mut kw, &mut out);
+                    n2 += out.len();
+                    codes.extend(out.iter().map(|x| x.0));
+                }
+            }
+            let te = t0.elapsed();
+            assert_eq!(n, n2);
+            let t1 = std::time::Instant::now();
+            let mut hits = 0usize;
+            for &c in &codes {
+                hits += idx.postings(c).len();
+            }
+            let tl = t1.elapsed();
+            eprintln!(
+                "thr {} cap {}: {} kmers, best-first {:.1} ns/kmer, depth-first+boundary {:.1} ns/kmer, lookup {:.1} ns/kmer ({} postings)",
+                thr,
+                cap,
+                n,
+                th.as_nanos() as f64 / n as f64,
+                te.as_nanos() as f64 / n as f64,
+                tl.as_nanos() as f64 / codes.len() as f64,
+                hits
+            );
+        }
     }
 }

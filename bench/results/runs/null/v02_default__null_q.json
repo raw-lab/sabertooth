@@ -1,0 +1,114 @@
+{
+ "run": "v02_default",
+ "tool": "baseline",
+ "version": "Sabertooth v0.2.0",
+ "workload": "null_q",
+ "database": "scope40",
+ "args": [],
+ "options": {},
+ "command": [
+  "/home/claude/baseline/sabertooth/target/release/sabertooth",
+  "search",
+  "/home/claude/bench_data/ds/q_null.fa",
+  "/home/claude/bench_data/ds/scope40.fa",
+  "--evalue",
+  "10",
+  "--max-hits",
+  "4000",
+  "--threads",
+  "2",
+  "--out",
+  "/home/claude/bench_results/null/v02_default__null_q.m8"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "v02_default__null_q",
+  "cmd": [
+   "/home/claude/baseline/sabertooth/target/release/sabertooth",
+   "search",
+   "/home/claude/bench_data/ds/q_null.fa",
+   "/home/claude/bench_data/ds/scope40.fa",
+   "--evalue",
+   "10",
+   "--max-hits",
+   "4000",
+   "--threads",
+   "2",
+   "--out",
+   "/home/claude/bench_results/null/v02_default__null_q.m8"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 9.302881080002408,
+   "median": 9.302881080002408,
+   "max": 9.302881080002408,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 308756480,
+   "median": 308756480,
+   "max": 308756480
+  },
+  "runs": [
+   {
+    "wall_s": 9.302881080002408,
+    "exit": 0,
+    "peak_rss_bytes": 308756480,
+    "user_s": 15.079534,
+    "sys_s": 0.24063199999999998,
+    "minor_faults": 99380,
+    "major_faults": 0,
+    "stderr_tail": "search: 1000 queries x 14323 targets, 10242 hits in 8.56s\n",
+    "rep": 0
+   }
+  ]
+ },
+ "db_build": null,
+ "null": {
+  "queries": 1000,
+  "thresholds": [
+   {
+    "evalue": 0.0001,
+    "hits": 1,
+    "per_query": 0.001,
+    "expected_per_query": 0.0001,
+    "observed_over_expected": 10.0
+   },
+   {
+    "evalue": 0.001,
+    "hits": 4,
+    "per_query": 0.004,
+    "expected_per_query": 0.001,
+    "observed_over_expected": 4.0
+   },
+   {
+    "evalue": 0.01,
+    "hits": 31,
+    "per_query": 0.031,
+    "expected_per_query": 0.01,
+    "observed_over_expected": 3.1
+   },
+   {
+    "evalue": 0.1,
+    "hits": 208,
+    "per_query": 0.208,
+    "expected_per_query": 0.1,
+    "observed_over_expected": 2.0799999999999996
+   },
+   {
+    "evalue": 1.0,
+    "hits": 1429,
+    "per_query": 1.429,
+    "expected_per_query": 1.0,
+    "observed_over_expected": 1.429
+   },
+   {
+    "evalue": 10.0,
+    "hits": 10242,
+    "per_query": 10.242,
+    "expected_per_query": 10.0,
+    "observed_over_expected": 1.0242
+   }
+  ]
+ }
+}

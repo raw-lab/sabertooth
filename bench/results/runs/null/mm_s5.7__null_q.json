@@ -1,0 +1,203 @@
+{
+ "run": "mm_s5.7",
+ "tool": "mmseqs",
+ "version": "MMseqs2 8cc5ce367b5638c4306c2d7cfc652dd099a4643f",
+ "workload": "null_q",
+ "database": "scope40",
+ "args": [
+  "-s",
+  "5.7"
+ ],
+ "options": {},
+ "command": [
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/ds/q_null.fa",
+  "/home/claude/bench_results/null/dbs/mm_scope40",
+  "/home/claude/bench_results/null/mm_s5.7__null_q.m8",
+  "/home/claude/bench_results/null/tmp_mm_s5.7__null_q",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "mm_s5.7__null_q",
+  "cmd": [
+   "/home/claude/tools/mmseqs/bin/mmseqs",
+   "easy-search",
+   "/home/claude/bench_data/ds/q_null.fa",
+   "/home/claude/bench_results/null/dbs/mm_scope40",
+   "/home/claude/bench_results/null/mm_s5.7__null_q.m8",
+   "/home/claude/bench_results/null/tmp_mm_s5.7__null_q",
+   "-e",
+   "10",
+   "--max-seqs",
+   "4000",
+   "--threads",
+   "2",
+   "-v",
+   "1",
+   "-s",
+   "5.7"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 1.4428724749996036,
+   "median": 1.4428724749996036,
+   "max": 1.4428724749996036,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 923418624,
+   "median": 923418624,
+   "max": 923418624
+  },
+  "runs": [
+   {
+    "wall_s": 1.4428724749996036,
+    "exit": 0,
+    "peak_rss_bytes": 923418624,
+    "user_s": 2.571441,
+    "sys_s": 0.07178,
+    "minor_faults": 6183,
+    "major_faults": 375,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "db_build": {
+  "tool": "mmseqs",
+  "db": "scope40",
+  "createdb": {
+   "label": "createdb",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createdb",
+    "/home/claude/bench_data/ds/scope40.fa",
+    "/home/claude/bench_results/null/dbs/mm_scope40",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "wall_s": {
+    "min": 0.032199089000641834,
+    "median": 0.032199089000641834,
+    "max": 0.032199089000641834,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 11538432,
+    "median": 11538432,
+    "max": 11538432
+   },
+   "runs": [
+    {
+     "wall_s": 0.032199089000641834,
+     "exit": 0,
+     "peak_rss_bytes": 11538432,
+     "user_s": 0.027396,
+     "sys_s": 0.011822,
+     "minor_faults": 1618,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "createindex": {
+   "label": "createindex",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createindex",
+    "/home/claude/bench_results/null/dbs/mm_scope40",
+    "/home/claude/bench_results/null/dbs/mm_tmp_scope40",
+    "--threads",
+    "2",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "wall_s": {
+    "min": 7.0935116189975815,
+    "median": 7.0935116189975815,
+    "max": 7.0935116189975815,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 932179968,
+    "median": 932179968,
+    "max": 932179968
+   },
+   "runs": [
+    {
+     "wall_s": 7.0935116189975815,
+     "exit": 0,
+     "peak_rss_bytes": 932179968,
+     "user_s": 3.353536,
+     "sys_s": 4.855104,
+     "minor_faults": 321693,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "db_bytes": 924872552
+ },
+ "null": {
+  "queries": 1000,
+  "thresholds": [
+   {
+    "evalue": 0.0001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.0001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.01,
+    "hits": 1,
+    "per_query": 0.001,
+    "expected_per_query": 0.01,
+    "observed_over_expected": 0.1
+   },
+   {
+    "evalue": 0.1,
+    "hits": 13,
+    "per_query": 0.013,
+    "expected_per_query": 0.1,
+    "observed_over_expected": 0.12999999999999998
+   },
+   {
+    "evalue": 1.0,
+    "hits": 76,
+    "per_query": 0.076,
+    "expected_per_query": 1.0,
+    "observed_over_expected": 0.076
+   },
+   {
+    "evalue": 10.0,
+    "hits": 478,
+    "per_query": 0.478,
+    "expected_per_query": 10.0,
+    "observed_over_expected": 0.047799999999999995
+   }
+  ]
+ }
+}

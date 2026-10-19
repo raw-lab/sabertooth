@@ -1,0 +1,44 @@
+{
+ "tool": "diamond",
+ "db": "decoy",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/tools/diamond",
+   "makedb",
+   "--in",
+   "/home/claude/bench_data/ds/db_decoy.fa",
+   "-d",
+   "/home/claude/bench_results/eval/dbs/dm_decoy",
+   "--threads",
+   "2",
+   "--quiet"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 0.16520392299935338,
+   "median": 0.16520392299935338,
+   "max": 0.16520392299935338,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 25268224,
+   "median": 25268224,
+   "max": 25268224
+  },
+  "runs": [
+   {
+    "wall_s": 0.16520392299935338,
+    "exit": 0,
+    "peak_rss_bytes": 25268224,
+    "user_s": 0.275159,
+    "sys_s": 0.028241,
+    "minor_faults": 7796,
+    "major_faults": 0,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "db_bytes": 7382038
+}

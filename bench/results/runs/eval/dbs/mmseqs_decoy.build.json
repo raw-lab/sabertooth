@@ -1,0 +1,79 @@
+{
+ "tool": "mmseqs",
+ "db": "decoy",
+ "createdb": {
+  "label": "createdb",
+  "cmd": [
+   "/home/claude/tools/mmseqs/bin/mmseqs",
+   "createdb",
+   "/home/claude/bench_data/ds/db_decoy.fa",
+   "/home/claude/bench_results/eval/dbs/mm_decoy",
+   "-v",
+   "1"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 0.0773490000028687,
+   "median": 0.0773490000028687,
+   "max": 0.0773490000028687,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 13070336,
+   "median": 13070336,
+   "max": 13070336
+  },
+  "runs": [
+   {
+    "wall_s": 0.0773490000028687,
+    "exit": 0,
+    "peak_rss_bytes": 13070336,
+    "user_s": 0.07406599999999999,
+    "sys_s": 0.016481,
+    "minor_faults": 3003,
+    "major_faults": 0,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "createindex": {
+  "label": "createindex",
+  "cmd": [
+   "/home/claude/tools/mmseqs/bin/mmseqs",
+   "createindex",
+   "/home/claude/bench_results/eval/dbs/mm_decoy",
+   "/home/claude/bench_results/eval/dbs/mm_tmp_decoy",
+   "--threads",
+   "2",
+   "-v",
+   "1"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 7.10302580699863,
+   "median": 7.10302580699863,
+   "max": 7.10302580699863,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 956395520,
+   "median": 956395520,
+   "max": 956395520
+  },
+  "runs": [
+   {
+    "wall_s": 7.10302580699863,
+    "exit": 0,
+    "peak_rss_bytes": 956395520,
+    "user_s": 4.416082,
+    "sys_s": 4.312745,
+    "minor_faults": 327715,
+    "major_faults": 0,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "db_bytes": 957692174
+}

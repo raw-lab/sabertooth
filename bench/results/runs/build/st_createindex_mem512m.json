@@ -1,0 +1,103 @@
+{
+ "run": "st_createindex_mem512m",
+ "tool": "sabertooth",
+ "version": "Sabertooth v0.3.0",
+ "database": "scale",
+ "args": [
+  "--memory-limit",
+  "384M"
+ ],
+ "options": {
+  "cgroup": 536870912
+ },
+ "command": [
+  "/home/claude/work/sabertooth/target/release/sabertooth",
+  "createindex",
+  "/home/claude/bench_results/build/dbs/st_scale",
+  "/home/claude/bench_results/build/tmp_st_createindex_mem512m.stidx",
+  "--threads",
+  "2",
+  "--stats-json",
+  "/home/claude/bench_results/build/st_createindex_mem512m.stats.json",
+  "--memory-limit",
+  "384M"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "st_createindex_mem512m",
+  "cmd": [
+   "/home/claude/work/sabertooth/target/release/sabertooth",
+   "createindex",
+   "/home/claude/bench_results/build/dbs/st_scale",
+   "/home/claude/bench_results/build/tmp_st_createindex_mem512m.stidx",
+   "--threads",
+   "2",
+   "--stats-json",
+   "/home/claude/bench_results/build/st_createindex_mem512m.stats.json",
+   "--memory-limit",
+   "384M"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 16.68411768000078,
+   "median": 16.68411768000078,
+   "max": 16.68411768000078,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 473595904,
+   "median": 473595904,
+   "max": 473595904
+  },
+  "runs": [
+   {
+    "wall_s": 16.68411768000078,
+    "exit": 0,
+    "peak_rss_bytes": 473595904,
+    "user_s": 26.099446,
+    "sys_s": 1.679367,
+    "minor_faults": 407341,
+    "major_faults": 6,
+    "stderr_tail": "createindex: 374323 sequences, 68310060 residues -> /home/claude/bench_results/build/tmp_st_createindex_mem512m.stidx (64503797 postings, 28585230 distinct 6-mers, 1522659 masked residues, 6 partition(s), 832.6 MiB) in 16.67s; peak RSS 451.7 MiB\n",
+    "rep": 0,
+    "cgroup": {
+     "limit_bytes": 536870912,
+     "max_usage_bytes": 536870912,
+     "failcnt": 20272
+    }
+   }
+  ]
+ },
+ "createindex_stats": {
+  "command": "createindex",
+  "version": "0.3.0",
+  "output": "/home/claude/bench_results/build/tmp_st_createindex_mem512m.stidx",
+  "seed_pattern": "111111",
+  "masked": true,
+  "memory_budget_bytes": 201326592,
+  "threads": 2,
+  "wall_s": 16.674019,
+  "build": {
+   "sequences": 374323,
+   "residues": 68310060,
+   "postings": 64503797,
+   "distinct_kmers": 28585230,
+   "masked_residues": 1522659,
+   "partitions": 6,
+   "partition_buffer_bytes": 201326576,
+   "bucket_table_bytes": 76800016,
+   "file_bytes": 873084952,
+   "seconds_sequences": 0.821918,
+   "seconds_count": 1.991077,
+   "seconds_postings": 13.090492,
+   "seconds_finish": 0.663821
+  },
+  "memory": {
+   "peak_rss_bytes": 473595904,
+   "minor_page_faults": 407337,
+   "major_page_faults": 6
+  }
+ },
+ "index_bytes": 873084952
+}

@@ -23,7 +23,7 @@ pub struct TaxTree {
 
 /// Split a `.dmp` line on the `\t|\t` (and trailing `\t|`) field separator.
 fn dmp_fields(line: &str) -> Vec<&str> {
-    let trimmed = line.trim_end_matches(|c| c == '|' || c == '\t' || c == '\n' || c == '\r');
+    let trimmed = line.trim_end_matches(['|', '\t', '\n', '\r']);
     trimmed.split("\t|\t").map(|s| s.trim()).collect()
 }
 
@@ -117,7 +117,7 @@ impl TaxTree {
 pub fn parse_seqmap(text: &str) -> HashMap<String, u32> {
     let mut m = HashMap::new();
     for line in text.lines() {
-        let mut it = line.split(|c| c == '\t' || c == ',');
+        let mut it = line.split(['\t', ',']);
         let id = it.next().map(|s| s.trim());
         let taxid = it.next().and_then(|s| s.trim().parse::<u32>().ok());
         if let (Some(id), Some(taxid)) = (id, taxid) {

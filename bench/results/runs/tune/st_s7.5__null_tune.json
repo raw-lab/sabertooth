@@ -1,0 +1,297 @@
+{
+ "run": "st_s7.5",
+ "tool": "sabertooth",
+ "version": "Sabertooth v0.3.0",
+ "workload": "null_tune",
+ "database": "scope40",
+ "args": [
+  "-s",
+  "7.5"
+ ],
+ "options": {},
+ "command": [
+  "/home/claude/work/sabertooth/target/release/sabertooth",
+  "search",
+  "/home/claude/bench_data/ds/q_null_tune.fa",
+  "/home/claude/bench_results/tune/dbs/st_scope40",
+  "--evalue",
+  "10",
+  "--max-hits",
+  "4000",
+  "--threads",
+  "2",
+  "--out",
+  "/home/claude/bench_results/tune/st_s7.5__null_tune.m8",
+  "--stats-json",
+  "/home/claude/bench_results/tune/st_s7.5__null_tune.stats.json",
+  "-s",
+  "7.5"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "st_s7.5__null_tune",
+  "cmd": [
+   "/home/claude/work/sabertooth/target/release/sabertooth",
+   "search",
+   "/home/claude/bench_data/ds/q_null_tune.fa",
+   "/home/claude/bench_results/tune/dbs/st_scope40",
+   "--evalue",
+   "10",
+   "--max-hits",
+   "4000",
+   "--threads",
+   "2",
+   "--out",
+   "/home/claude/bench_results/tune/st_s7.5__null_tune.m8",
+   "--stats-json",
+   "/home/claude/bench_results/tune/st_s7.5__null_tune.stats.json",
+   "-s",
+   "7.5"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 3.3095142189995386,
+   "median": 3.3095142189995386,
+   "max": 3.3095142189995386,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 70533120,
+   "median": 70533120,
+   "max": 70533120
+  },
+  "runs": [
+   {
+    "wall_s": 3.3095142189995386,
+    "exit": 0,
+    "peak_rss_bytes": 70533120,
+    "user_s": 6.276146,
+    "sys_s": 0.031339,
+    "minor_faults": 8463,
+    "major_faults": 0,
+    "stderr_tail": "search: 1000 queries x 14323 targets, 4379 hits in 3.30s\n",
+    "rep": 0
+   }
+  ]
+ },
+ "db_build": {
+  "tool": "sabertooth",
+  "db": "scope40",
+  "makedb": {
+   "label": "makedb",
+   "cmd": [
+    "/home/claude/work/sabertooth/target/release/sabertooth",
+    "makedb",
+    "/home/claude/bench_data/ds/scope40.fa",
+    "/home/claude/bench_results/tune/dbs/st_scope40"
+   ],
+   "repeat": 1,
+   "wall_s": {
+    "min": 0.023477128001104575,
+    "median": 0.023477128001104575,
+    "max": 0.023477128001104575,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 11448320,
+    "median": 11448320,
+    "max": 11448320
+   },
+   "runs": [
+    {
+     "wall_s": 0.023477128001104575,
+     "exit": 0,
+     "peak_rss_bytes": 11448320,
+     "user_s": 0.012565,
+     "sys_s": 0.004188,
+     "minor_faults": 623,
+     "major_faults": 0,
+     "stderr_tail": "makedb: wrote 14323 sequences to /home/claude/bench_results/tune/dbs/st_scope40{,.index,.dbtype,_h,_h.index,.lookup,.source} (amino acid)\n  (sequence database only; build the seed index with `sabertooth createindex /home/claude/bench_results/tune/dbs/st_scope40`)\n",
+     "rep": 0
+    }
+   ]
+  },
+  "createindex": {
+   "label": "createindex",
+   "cmd": [
+    "/home/claude/work/sabertooth/target/release/sabertooth",
+    "createindex",
+    "/home/claude/bench_results/tune/dbs/st_scope40",
+    "--threads",
+    "2"
+   ],
+   "repeat": 1,
+   "wall_s": {
+    "min": 0.3539777990008588,
+    "median": 0.3539777990008588,
+    "max": 0.3539777990008588,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 66002944,
+    "median": 66002944,
+    "max": 66002944
+   },
+   "runs": [
+    {
+     "wall_s": 0.3539777990008588,
+     "exit": 0,
+     "peak_rss_bytes": 66002944,
+     "user_s": 0.34579,
+     "sys_s": 0.084224,
+     "minor_faults": 18782,
+     "major_faults": 0,
+     "stderr_tail": "createindex: 14323 sequences, 2611087 residues -> /home/claude/bench_results/tune/dbs/st_scope40.stidx (2429660 postings, 2271827 distinct 6-mers, 85968 masked residues, 1 partition(s), 41.1 MiB) in 351.41ms; peak RSS 62.9 MiB\n",
+     "rep": 0
+    }
+   ]
+  },
+  "index_bytes": 43116824,
+  "db_bytes": 46682999
+ },
+ "sabertooth_stats": {
+  "command": "search",
+  "version": "0.3.0",
+  "plan": {
+   "budget_bytes": null,
+   "threads": 2,
+   "hit_block": 1048576,
+   "variant_cache_ranges": 524288,
+   "full_traceback_cells": 4194304,
+   "per_worker_scratch_estimate_bytes": 35651584,
+   "query_batch_seqs": 1024,
+   "query_batch_residues": 67108864,
+   "index_build_budget_bytes": 1073741824
+  },
+  "statistics_model": "calibrated gapped (BLOSUM62 11/1, comp-bias on) (lambda 0.3649, K 0.1076)",
+  "wall_s": {
+   "load": 0.000927,
+   "search": 3.295611,
+   "output": 0.004929,
+   "total": 3.303546
+  },
+  "queries_per_s": 303.433829,
+  "per_query": {
+   "postings_visited": 8151.907,
+   "candidates": 72.052,
+   "gapped_alignments": 72.052,
+   "tracebacks": 4.379,
+   "hits": 4.379
+  },
+  "counters": {
+   "queries": 1000,
+   "query_residues": 180068,
+   "windows": 175068,
+   "windows_skipped_mask_or_x": 7255,
+   "kmers_generated": 138715678,
+   "windows_at_kmer_cap": 100953,
+   "exact_seeds_added": 0,
+   "variant_cache_hits": 6,
+   "variant_cache_misses": 48171,
+   "index_lookups": 138711703,
+   "index_prefix_probes": 6724746,
+   "presence_bitmap_rejects": 131190197,
+   "seeds_with_postings": 7521916,
+   "postings_visited": 8151907,
+   "seeds_over_occ_cap": 0,
+   "postings_skipped_occ_cap": 0,
+   "target_blocks": 999,
+   "hit_buffer_peak_entries": 37789,
+   "hit_buffer_peak_bytes": 604624,
+   "hit_buffer_overruns": 0,
+   "targets_hit": 4545351,
+   "targets_evaluated": 4545351,
+   "diagonals_scored": 6519103,
+   "xdrop_extensions": 6523872,
+   "chains_used": 87672,
+   "candidates": 72052,
+   "candidates_capped": 0,
+   "gapped_scored": 72052,
+   "gapped_cells": 5015498224,
+   "scalar_fallbacks": 0,
+   "windowed": 0,
+   "window_expansions": 0,
+   "passed_score": 4379,
+   "tracebacks": 4379,
+   "rejected_coverage": 0,
+   "hits": 4379,
+   "score_mismatches": 0,
+   "profile_calibrations": 0,
+   "masked_scoring_positions": 1596,
+   "cpu_s_setup": 0.041889,
+   "cpu_s_prefilter": 5.846409,
+   "cpu_s_seed_generation": 4.487297,
+   "cpu_s_hit_collection_sort": 0.394865,
+   "cpu_s_diagonal_evidence": 0.960562,
+   "cpu_s_gapped_scoring": 0.550189,
+   "cpu_s_traceback": 0.146999
+  },
+  "memory": {
+   "peak_rss_bytes": 70533120,
+   "seed_hit_buffer_peak_bytes": 604624,
+   "minor_page_faults": 8461,
+   "major_page_faults": 0,
+   "user_cpu_s": 6.27,
+   "system_cpu_s": 0.02
+  },
+  "index": {
+   "source": "persistent index /home/claude/bench_results/tune/dbs/st_scope40.stidx",
+   "seed_pattern": "111111",
+   "masked": true,
+   "sequences": 14323,
+   "residues": 2611087,
+   "postings": 2429660,
+   "distinct_kmers": 2271827,
+   "mapped_bytes": 43116824,
+   "seconds_open_or_build": 5.9e-05
+  }
+ },
+ "null": {
+  "queries": 1000,
+  "thresholds": [
+   {
+    "evalue": 0.0001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.0001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.01,
+    "hits": 7,
+    "per_query": 0.007,
+    "expected_per_query": 0.01,
+    "observed_over_expected": 0.7
+   },
+   {
+    "evalue": 0.1,
+    "hits": 58,
+    "per_query": 0.058,
+    "expected_per_query": 0.1,
+    "observed_over_expected": 0.58
+   },
+   {
+    "evalue": 1.0,
+    "hits": 494,
+    "per_query": 0.494,
+    "expected_per_query": 1.0,
+    "observed_over_expected": 0.494
+   },
+   {
+    "evalue": 10.0,
+    "hits": 4379,
+    "per_query": 4.379,
+    "expected_per_query": 10.0,
+    "observed_over_expected": 0.43789999999999996
+   }
+  ]
+ }
+}

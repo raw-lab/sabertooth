@@ -1,0 +1,80 @@
+{
+ "run": "v02_default_mem1g",
+ "tool": "baseline",
+ "version": "Sabertooth v0.2.0",
+ "workload": "scale",
+ "database": "scale",
+ "args": [],
+ "options": {
+  "cgroup": 1073741824,
+  "evict_db": true
+ },
+ "command": [
+  "/home/claude/baseline/sabertooth/target/release/sabertooth",
+  "search",
+  "/home/claude/bench_data/ds_scale/q_tune.fa",
+  "/home/claude/bench_data/ds_scale/scale_db.fa",
+  "--evalue",
+  "10",
+  "--max-hits",
+  "4000",
+  "--threads",
+  "2",
+  "--out",
+  "/home/claude/bench_results/scale/v02_default_mem1g__scale.m8"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "v02_default_mem1g__scale",
+  "cmd": [
+   "/home/claude/baseline/sabertooth/target/release/sabertooth",
+   "search",
+   "/home/claude/bench_data/ds_scale/q_tune.fa",
+   "/home/claude/bench_data/ds_scale/scale_db.fa",
+   "--evalue",
+   "10",
+   "--max-hits",
+   "4000",
+   "--threads",
+   "2",
+   "--out",
+   "/home/claude/bench_results/scale/v02_default_mem1g__scale.m8"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 4.01214464000077,
+   "median": 4.01214464000077,
+   "max": 4.01214464000077,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 1074216960,
+   "median": 1074216960,
+   "max": 1074216960
+  },
+  "runs": [
+   {
+    "wall_s": 4.01214464000077,
+    "exit": -9,
+    "peak_rss_bytes": 1074216960,
+    "user_s": 3.244752,
+    "sys_s": 0.74446,
+    "minor_faults": 329169,
+    "major_faults": 0,
+    "stderr_tail": "",
+    "rep": 0,
+    "cgroup": {
+     "limit_bytes": 1073741824,
+     "max_usage_bytes": 1073741824,
+     "failcnt": 18356
+    }
+   }
+  ]
+ },
+ "db_build": null,
+ "failed": {
+  "exit": -9,
+  "stderr_tail": ""
+ }
+}

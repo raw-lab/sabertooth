@@ -1,0 +1,167 @@
+{
+ "run": "dm_sensitive",
+ "tool": "diamond",
+ "version": "diamond version 2.2.8",
+ "workload": "null_q",
+ "database": "scope40",
+ "args": [
+  "--sensitive"
+ ],
+ "options": {},
+ "command": [
+  "/home/claude/tools/diamond",
+  "blastp",
+  "-q",
+  "/home/claude/bench_data/ds/q_null.fa",
+  "-d",
+  "/home/claude/bench_results/null/dbs/dm_scope40",
+  "-o",
+  "/home/claude/bench_results/null/dm_sensitive__null_q.m8",
+  "-e",
+  "10",
+  "-k",
+  "4000",
+  "--threads",
+  "2",
+  "--quiet",
+  "--sensitive"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "dm_sensitive__null_q",
+  "cmd": [
+   "/home/claude/tools/diamond",
+   "blastp",
+   "-q",
+   "/home/claude/bench_data/ds/q_null.fa",
+   "-d",
+   "/home/claude/bench_results/null/dbs/dm_scope40",
+   "-o",
+   "/home/claude/bench_results/null/dm_sensitive__null_q.m8",
+   "-e",
+   "10",
+   "-k",
+   "4000",
+   "--threads",
+   "2",
+   "--quiet",
+   "--sensitive"
+  ],
+  "repeat": 1,
+  "wall_s": {
+   "min": 2.0335173460007354,
+   "median": 2.0335173460007354,
+   "max": 2.0335173460007354,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 29687808,
+   "median": 29687808,
+   "max": 29687808
+  },
+  "runs": [
+   {
+    "wall_s": 2.0335173460007354,
+    "exit": 0,
+    "peak_rss_bytes": 29687808,
+    "user_s": 3.444659,
+    "sys_s": 0.163495,
+    "minor_faults": 19185,
+    "major_faults": 0,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "db_build": {
+  "tool": "diamond",
+  "db": "scope40",
+  "makedb": {
+   "label": "makedb",
+   "cmd": [
+    "/home/claude/tools/diamond",
+    "makedb",
+    "--in",
+    "/home/claude/bench_data/ds/scope40.fa",
+    "-d",
+    "/home/claude/bench_results/null/dbs/dm_scope40",
+    "--threads",
+    "2",
+    "--quiet"
+   ],
+   "repeat": 1,
+   "wall_s": {
+    "min": 0.10341766199780977,
+    "median": 0.10341766199780977,
+    "max": 0.10341766199780977,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 21176320,
+    "median": 21176320,
+    "max": 21176320
+   },
+   "runs": [
+    {
+     "wall_s": 0.10341766199780977,
+     "exit": 0,
+     "peak_rss_bytes": 21176320,
+     "user_s": 0.142462,
+     "sys_s": 0.021181,
+     "minor_faults": 5366,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "db_bytes": 3114683
+ },
+ "null": {
+  "queries": 1000,
+  "thresholds": [
+   {
+    "evalue": 0.0001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.0001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.01,
+    "hits": 2,
+    "per_query": 0.002,
+    "expected_per_query": 0.01,
+    "observed_over_expected": 0.2
+   },
+   {
+    "evalue": 0.1,
+    "hits": 3,
+    "per_query": 0.003,
+    "expected_per_query": 0.1,
+    "observed_over_expected": 0.03
+   },
+   {
+    "evalue": 1.0,
+    "hits": 9,
+    "per_query": 0.009,
+    "expected_per_query": 1.0,
+    "observed_over_expected": 0.009
+   },
+   {
+    "evalue": 10.0,
+    "hits": 24,
+    "per_query": 0.024,
+    "expected_per_query": 10.0,
+    "observed_over_expected": 0.0024000000000000002
+   }
+  ]
+ }
+}

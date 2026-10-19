@@ -9,7 +9,7 @@
 //! packages the ORFs of a nucleotide database as a protein query `SeqDb` so the
 //! existing protein search path can be reused unchanged.
 
-use crate::fasta::{Record, SeqDb};
+use crate::fasta::{LoadOptions, SeqDb};
 
 /// NCBI standard genetic code (transl_table = 1), amino-acid letters in codon
 /// order with base index T=0, C=1, A=2, G=3 and `codon = 16·b1 + 4·b2 + b3`.
@@ -158,37 +158,28 @@ pub struct OrfMeta {
 /// Build a protein query `SeqDb` from a nucleotide database by six-frame ORF
 /// extraction, so the ordinary protein search path can run over it. Each ORF
 /// record is named `"<source>_f<frame>_<nt_start>"`. Returns the db and parallel
-/// metadata (same order as `db.records`).
+/// metadata (same order as the db's records). The nucleotide database must have
+/// been loaded with its letters retained ([`LoadOptions::LETTERS`] or `FULL`).
 pub fn orf_query_db(nt_db: &SeqDb, aa2num: &[u8; 256], min_aa: usize) -> (SeqDb, Vec<OrfMeta>) {
-    let mut records = Vec::new();
+    let mut db = SeqDb::new(LoadOptions::FULL);
     let mut meta = Vec::new();
-    let mut total = 0usize;
-    for rec in &nt_db.records {
-        for orf in six_frame_orfs(&rec.seq, min_aa) {
-            let num: Vec<u8> = orf.protein.iter().map(|&b| aa2num[b as usize]).collect();
-            let id = format!("{}_f{}_{}", rec.id, orf.frame, orf.nt_start);
-            total += num.len();
+    let mut num: Vec<u8> = Vec::new();
+    for i in 0..nt_db.len() {
+        let letters = nt_db.seq(i);
+        for orf in six_frame_orfs(&letters, min_aa) {
+            num.clear();
+            num.extend(orf.protein.iter().map(|&b| aa2num[b as usize]));
+            let id = format!("{}_f{}_{}", nt_db.id(i), orf.frame, orf.nt_start);
             meta.push(OrfMeta {
-                source_id: rec.id.clone(),
+                source_id: nt_db.id(i).to_string(),
                 frame: orf.frame,
                 nt_start: orf.nt_start,
                 aa_len: num.len(),
             });
-            records.push(Record {
-                header: id.clone(),
-                id,
-                seq: orf.protein,
-                num,
-            });
+            db.push_encoded(&id, Some(&id), &num, Some(&orf.protein));
         }
     }
-    (
-        SeqDb {
-            records,
-            total_residues: total,
-        },
-        meta,
-    )
+    (db, meta)
 }
 
 #[cfg(test)]
@@ -239,20 +230,12 @@ mod tests {
     #[test]
     fn orf_db_builds_protein_records() {
         let t = build_aa2num();
-        let nt = SeqDb {
-            records: vec![Record {
-                header: "seq1".into(),
-                id: "seq1".into(),
-                seq: b"ATGAAATTTGGGTAA".to_vec(),
-                num: vec![],
-            }],
-            total_residues: 0,
-        };
+        let nt = SeqDb::from_reader(std::io::Cursor::new(">seq1\nATGAAATTTGGGTAA\n"), &t).unwrap();
         let (db, meta) = orf_query_db(&nt, &t, 3);
-        assert!(!db.records.is_empty());
-        assert_eq!(db.records.len(), meta.len());
+        assert!(!db.is_empty());
+        assert_eq!(db.len(), meta.len());
         // the MKFG ORF should be encoded to protein numerics
         let mkfg: Vec<u8> = "MKFG".bytes().map(|b| t[b as usize]).collect();
-        assert!(db.records.iter().any(|r| r.num == mkfg));
+        assert!((0..db.len()).any(|i| db.num(i) == &mkfg[..]));
     }
 }

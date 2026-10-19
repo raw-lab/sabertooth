@@ -16,21 +16,32 @@
 //! the search backend for a Rust reimplementation of geNomad-style profile
 //! scanning.
 
+// Numeric kernels index several parallel arrays with one loop variable, test
+// fixtures set a few fields of a default value, and the engine's entry points
+// take explicit arguments: these three style lints are allowed crate-wide.
+#![allow(clippy::needless_range_loop, clippy::field_reassign_with_default, clippy::too_many_arguments)]
+
 pub mod align;
 pub mod alphabet;
 pub mod banner;
 pub mod cluster;
+pub mod compbias;
 #[cfg(feature = "distributed")]
 pub mod distributed;
 pub mod evalue;
 pub mod fasta;
+pub mod index;
+pub mod mask;
 pub mod matrix;
+pub mod metrics;
 pub mod mmdb;
 pub mod msa;
 pub mod nucl;
 pub mod prefilter;
 pub mod profile;
 pub mod search;
+pub mod seqio;
+pub mod shard;
 pub mod taxonomy;
 pub mod simd;
 

@@ -1,0 +1,89 @@
+{
+ "run": "st_createindex",
+ "tool": "sabertooth",
+ "version": "Sabertooth v0.3.0",
+ "database": "scale",
+ "args": [],
+ "options": {},
+ "command": [
+  "/home/claude/work/sabertooth/target/release/sabertooth",
+  "createindex",
+  "/home/claude/bench_results/build/dbs/st_scale",
+  "/home/claude/bench_results/build/tmp_st_createindex.stidx",
+  "--threads",
+  "2",
+  "--stats-json",
+  "/home/claude/bench_results/build/st_createindex.stats.json"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "st_createindex",
+  "cmd": [
+   "/home/claude/work/sabertooth/target/release/sabertooth",
+   "createindex",
+   "/home/claude/bench_results/build/dbs/st_scale",
+   "/home/claude/bench_results/build/tmp_st_createindex.stidx",
+   "--threads",
+   "2",
+   "--stats-json",
+   "/home/claude/bench_results/build/st_createindex.stats.json"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 13.42967846800093,
+   "median": 13.42967846800093,
+   "max": 13.42967846800093,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 1527287808,
+   "median": 1527287808,
+   "max": 1527287808
+  },
+  "runs": [
+   {
+    "wall_s": 13.42967846800093,
+    "exit": 0,
+    "peak_rss_bytes": 1527287808,
+    "user_s": 15.260513,
+    "sys_s": 3.70459,
+    "minor_faults": 431446,
+    "major_faults": 0,
+    "stderr_tail": "createindex: 374323 sequences, 68310060 residues -> /home/claude/bench_results/build/tmp_st_createindex.stidx (64503797 postings, 28585230 distinct 6-mers, 1522659 masked residues, 1 partition(s), 832.6 MiB) in 13.41s; peak RSS 1456.5 MiB\n",
+    "rep": 0
+   }
+  ]
+ },
+ "createindex_stats": {
+  "command": "createindex",
+  "version": "0.3.0",
+  "output": "/home/claude/bench_results/build/tmp_st_createindex.stidx",
+  "seed_pattern": "111111",
+  "masked": true,
+  "memory_budget_bytes": 1073741824,
+  "threads": 2,
+  "wall_s": 13.410963,
+  "build": {
+   "sequences": 374323,
+   "residues": 68310060,
+   "postings": 64503797,
+   "distinct_kmers": 28585230,
+   "masked_residues": 1522659,
+   "partitions": 1,
+   "partition_buffer_bytes": 1032060752,
+   "bucket_table_bytes": 76800016,
+   "file_bytes": 873084952,
+   "seconds_sequences": 0.970635,
+   "seconds_count": 1.830262,
+   "seconds_postings": 9.502825,
+   "seconds_finish": 0.987873
+  },
+  "memory": {
+   "peak_rss_bytes": 1527287808,
+   "minor_page_faults": 431441,
+   "major_page_faults": 0
+  }
+ },
+ "index_bytes": 873084952
+}

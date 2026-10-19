@@ -1,0 +1,54 @@
+{
+ "label": "mm_1000M",
+ "cmd": [
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/ds_scale/q_tune.fa",
+  "dbs/mmnoidx_scale",
+  "/tmp/claude-0/-home-claude/6d52089c-4cc5-5fb7-b131-8bb4426efce6/scratchpad/mmsplit_1000M.m8",
+  "/tmp/claude-0/-home-claude/6d52089c-4cc5-5fb7-b131-8bb4426efce6/scratchpad/mmtmp",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7",
+  "--split-memory-limit",
+  "1000M"
+ ],
+ "repeat": 1,
+ "warmup_wall_s": [],
+ "wall_s": {
+  "min": 0.03953734400056419,
+  "median": 0.03953734400056419,
+  "max": 0.03953734400056419,
+  "stdev": 0.0
+ },
+ "peak_rss_bytes": {
+  "min": 20176896,
+  "median": 20176896,
+  "max": 20176896
+ },
+ "runs": [
+  {
+   "wall_s": 0.03953734400056419,
+   "exit": 1,
+   "peak_rss_bytes": 20176896,
+   "user_s": 0.028510999999999998,
+   "sys_s": 0.008255,
+   "minor_faults": 3602,
+   "major_faults": 1,
+   "stderr_tail": "Cannot fit databases into 991M. Please use a computer with more main memory.\n",
+   "rep": 0,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 17956864,
+    "failcnt": 0
+   }
+  }
+ ]
+}

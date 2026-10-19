@@ -1,0 +1,53 @@
+gaps 11/1  comp-bias-corr 0  (20000 samples x 8 lengths, seed 24301, 5.4s)
+  lambda = 0.3666   K = 0.1177   alpha/lambda = 2.7   beta = -13   (ln K rms across lengths 0.006)
+       m      n     mean       sd  lambda_ml        mu
+      60     60    17.06     3.24     0.4016     16.21
+     100    100    19.94     3.35     0.3842     18.98
+     150    150    22.23     3.43     0.3764     21.22
+     220    220    24.36     3.47     0.3729     23.33
+     320    320    26.46     3.49     0.3682     25.40
+     480    480    28.73     3.46     0.3678     27.67
+     700    700    30.87     3.53     0.3636     29.77
+    1000   1000    32.89     3.53     0.3607     31.78
+  table: lambda 0.3666 K 0.1177 (sabertooth 0.3.0 calibrate --table --samples 20000 --seed 24301 (lengths [60, 100, 150, 220, 320, 480, 700, 1000]))
+
+gaps 11/1  comp-bias-corr 1  (20000 samples x 8 lengths, seed 24301, 7.4s)
+  lambda = 0.3649   K = 0.1076   alpha/lambda = 2.4   beta = -12   (ln K rms across lengths 0.007)
+       m      n     mean       sd  lambda_ml        mu
+      60     60    16.99     3.26     0.3956     16.11
+     100    100    19.87     3.38     0.3794     18.89
+     150    150    22.15     3.45     0.3733     21.12
+     220    220    24.26     3.46     0.3725     23.23
+     320    320    26.37     3.52     0.3654     25.29
+     480    480    28.64     3.46     0.3655     27.57
+     700    700    30.80     3.54     0.3622     29.69
+    1000   1000    32.80     3.53     0.3595     31.69
+  table: lambda 0.3649 K 0.1076 (sabertooth 0.3.0 calibrate --table --samples 20000 --seed 24301 (lengths [60, 100, 150, 220, 320, 480, 700, 1000]))
+
+// paste into SEQUENCE_TABLE in src/evalue.rs
+    TableEntry {
+        gaps: GapCosts { open: 11, extend: 1 },
+        comp_bias: false,
+        params: GappedParams {
+            lambda: 0.3666,
+            k: 0.1177,
+            length: Some(LengthModel {
+                alpha_d_lambda: 2.7,
+                beta: -13.0,
+            }),
+        },
+        provenance: "sabertooth 0.3.0 calibrate --table --samples 20000 --seed 24301 (lengths [60, 100, 150, 220, 320, 480, 700, 1000])",
+    },
+    TableEntry {
+        gaps: GapCosts { open: 11, extend: 1 },
+        comp_bias: true,
+        params: GappedParams {
+            lambda: 0.3649,
+            k: 0.1076,
+            length: Some(LengthModel {
+                alpha_d_lambda: 2.4,
+                beta: -12.0,
+            }),
+        },
+        provenance: "sabertooth 0.3.0 calibrate --table --samples 20000 --seed 24301 (lengths [60, 100, 150, 220, 320, 480, 700, 1000])",
+    },
