@@ -92,9 +92,12 @@ benchmark; no source file changed afterwards). A plain `cargo build
 --release` of the same tree (SHA-256 `e74800dc02c60142b3643d0b559308c2ac66a20a1051772e846da3766fc4d86b`
 on host B) gives byte-identical output on the tuning queries against SCOPe40
 (default and `-s 7.5`) and against the 68 M-residue database (12,104 / 16,343 /
-11,115 output lines, header included; re-checked by the independent review). Rust release builds embed no timestamps, but
-a rebuild elsewhere may still differ in bytes (paths, toolchain); the outputs
-are the reproducible quantity.
+11,115 output lines, header included; re-checked by the independent review).
+The crates.io packaging changes made after the review (license, crate
+metadata, a version requirement on `hydra-mpp-core`, README) do not change
+either binary: both rebuild to the hashes above (2026-11-02). Rust release
+builds embed no timestamps, but a rebuild elsewhere may still differ in bytes
+(paths, toolchain); the outputs are the reproducible quantity.
 
 ## v0.3 (history: the records in `bench/results/*.json`)
 

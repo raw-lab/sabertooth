@@ -1,31 +1,126 @@
-# Sabertooth
+# 🗡️ Sabertooth
 
-```
-   ___       _           _              _   _
-  / __| __ _| |__  ___ _| |_ ___  ___ _| |_| |_
-  \__ \/ _` | '_ \/ -_)  _/ _ \/ _ \  _|  _| ' \
-  |___/\__,_|_.__/\___|\__\___/\___/\__|\__|_||_|
-       \V/   \V/    fast · light · profile-sensitive
-```
+### *A pure-Rust reimplementation of the MMseqs2 profile/PSSM sensitivity core.*
 
-Pure-Rust protein homology search in the MMseqs2 mould: sequence and
-profile (PSSM) search against a persistent, memory-mapped seed index, with
-exact Smith–Waterman–Gotoh alignments and calibrated gapped E-values. One
-static binary, three runtime dependencies (`rayon`, `flate2`, `memmap2`).
+<div align="center">
 
-**v0.4** rebuilds the prefilter for large databases — a spaced seed, SIMD
-ungapped evidence, packed seed hits, an ungapped gate that follows the
-database size, and a smaller index format — and measures it head-to-head
-against MMseqs2 on databases from 2.6 M to 265 M residues. See
-[`CHANGES.md`](CHANGES.md) for what changed and why (and what was measured
-and rejected), and [`CHECKLIST-v0.4.md`](CHECKLIST-v0.4.md) for the
-item-by-item status with evidence. (v0.3, the correctness / false-positive
+![Rust](https://img.shields.io/badge/Rust-1.89%2B-black?logo=rust)
+![Crates.io](https://img.shields.io/crates/v/sabertooth?logo=rust)
+![Build](https://img.shields.io/github/actions/workflow/status/raw-lab/sabertooth/rust.yml?branch=main)
+![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-success)
+![Single crate](https://img.shields.io/badge/single%20crate-cargo%20install-orange?logo=rust)
+![Bioinformatics](https://img.shields.io/badge/domain-bioinformatics-green)
+![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey)
+
+### ⚡ Profile & Sequence Search • 🧬 Translated & Profile–Profile • 🧫 Clustering • 🌳 Taxonomy • 🚀 Parallel Rust
+
+</div>
+
+---
+
+# 🔬 What is Sabertooth?
+
+**Sabertooth** is a high-performance, dependency-light **Rust** reimplementation of the
+profile/PSSM sensitivity core of [MMseqs2](https://github.com/soedinglab/MMseqs2).
+
+Sequence and profile searches use a **persistent, memory-mapped seed index**, exact
+**Smith–Waterman–Gotoh** alignments, and **calibrated gapped E-values**.
+The toolkit also includes translated search, profile–profile search, clustering,
+MMseqs2 database interoperability, LCA taxonomy, and optional HydraMPP distribution.
+
+The earlier reference validation reports **400/400 exact substitution-matrix cells**,
+**635/700 exact PSSM cells**, and **697/700 within one quantization unit**.
+See [Validation](#-validation--verified-against-the-real-mmseqs) for the scope of those results.
+
+It ships as **one crate**: `cargo install sabertooth`, with three default runtime
+dependencies (`rayon`, `flate2`, `memmap2`) and no C/C++ toolchain.
+
+**v0.4** rebuilds the prefilter for large databases — a spaced seed, SIMD ungapped
+evidence, packed seed hits, an ungapped gate that follows the database size, and a
+smaller index format — and benchmarks it head-to-head against MMseqs2 on databases
+from 2.6 M to 265 M residues. See [`CHANGES.md`](CHANGES.md) for what changed and
+why (and what was measured and rejected), and [`CHECKLIST-v0.4.md`](CHECKLIST-v0.4.md)
+for item-by-item status with evidence. (v0.3, the correctness / false-positive
 overhaul of v0.2: [`CHECKLIST.md`](CHECKLIST.md).)
+
+---
+
+# ✨ Features
+
+<table>
+<tr>
+<td width="50%">
+
+## 🧬 Search & Alignment
+
+* Profile (PSSM) search — per-profile calibrated statistics
+* Sequence-vs-sequence search
+* Smith–Waterman–Gotoh gapped alignment
+* Striped **AVX2 / SSE2 SIMD** score kernels with runtime dispatch (AVX-512 opt-in)
+* Banded alignment for long sequences
+* Spaced-seed k-mer + similar-k-mer prefilter (default seed `111001101`)
+* Batched SIMD ungapped evidence & a database-size-aware gate
+* A sensitivity dial (`-s 1 … 9`)
+* Calibrated gapped E-values with length correction
+* SEG masking & composition-bias correction
+* Persistent, checksummed `.stidx` indexes (bit-packed postings, direct k-mer table)
+* Memory-budgeted out-of-core search
+* BLAST-tab `.m8` output
+
+</td>
+<td width="50%">
+
+## 🧫 Beyond the Core
+
+* a3m MSA generation (`result2msa`)
+* Six-frame translated search (`translatesearch`)
+* Profile–profile search (`profileprofile`)
+* Linclust-style clustering (`cluster`)
+* LCA taxonomy (`taxonomy`)
+* Database-free exhaustive SW (`easysearch`)
+* MMseqs2 on-disk DB read/write (verified interop)
+* Iterative (PSI-BLAST-style) profile search
+* Monte-Carlo gapped-statistics calibration
+
+</td>
+</tr>
+</table>
+
+```text
+✔ Exact matrix reconstruction & near-identical PSSMs in reference validation
+✔ Interoperable on-disk DB format (mmseqs reads ours; we read mmseqs')
+✔ Head-to-head with MMseqs2 from 2.6 M to 265 M residues: its default sensitivity in 1.8–2.5× less time
+✔ Optional multi-node scaling via RAW-lab HydraMPP
+✔ Single publishable crate, declared MSRV 1.89, no C/C++ toolchain
+✔ Persistent indexes, bounded buffers & reusable on-disk shards
+```
+
+---
+
+# ⚡ Why Sabertooth?
+
+| Feature                          | Sabertooth |
+| -------------------------------- | ---------- |
+| 🦀 Pure-Rust, single crate       | ✅ |
+| 🧬 Reference-validated PSSM / matrix   | ✅ |
+| 🚀 Multi-threaded (rayon)        | ✅ |
+| ⚙️ AVX2 / SSE2 runtime dispatch (AVX-512 opt-in) | ✅ |
+| 📈 Benchmarked against MMseqs2 up to 265 M residues | ✅ |
+| 🔁 Iterative profile search      | ✅ |
+| 🧫 Linclust-style clustering     | ✅ |
+| 🌳 LCA taxonomy                  | ✅ |
+| 🧠 Translated & profile–profile   | ✅ |
+| 💾 MMseqs2 DB interop            | ✅ |
+| 🌐 Optional HydraMPP distribution | ✅ |
+
+---
+
+# 📈 What’s New in v0.4?
 
 **Before / after** (v0.3.0 vs v0.4.0 defaults; both binaries re-run on the
 same 2-vCPU host (host A), 2 threads, held-out queries, median of 3 runs; every number
 comes from a run record in `bench/results/v0.4/` — see
-[Benchmarks](#benchmarks) for the method and what did *not* improve):
+[Benchmarks](#-benchmarks) for the method and what did *not* improve):
 
 <!-- table:before_after_v04 -->
 | | v0.3.0 | v0.4.0 | change |
@@ -88,8 +183,8 @@ comes from a run record in `bench/results/v0.4/` — see
   at every size (AUC1 +0.1% at 265 M to +5.3% on SCOPe40), with equal or
   fewer false positives at matched recall 0.06–0.10 up to 68 M — but by
   recall 0.10 it admits about as many as v0.3 at 134 M (881 vs 870) and 28%
-  more at 265 M (2,243 vs 1,750; see limitations). On a 1 GiB machine at 68 M residues: 7.3 s vs v0.3's 29.7 s
-  and MMseqs2's 260 s.
+  more at 265 M (2,243 vs 1,750; see limitations). On a 1 GiB machine at
+  68 M residues: 7.3 s vs v0.3's 29.7 s and MMseqs2's 260 s.
 
 AUC1 = fraction of each query's true homologs ranked above its first false
 positive, averaged over queries. "Matched recall 0.08" = the false positives
@@ -97,7 +192,80 @@ admitted by the time a tool has found 8% of all true homolog pairs.
 
 ---
 
-## Build
+# 🧱 Architecture
+
+```mermaid
+flowchart TD
+    A["FASTA / gzip / stdin / MMseqs2 DB"] --> B["Persistent seed index (spaced seed) + SEG masking"]
+    B --> C["Similar k-mers + packed seed hits"]
+    C --> D["SIMD ungapped evidence + size-adjusted gate"]
+    D --> E["AVX2 / SSE2 gapped scoring"]
+    E --> F["Exact traceback + calibrated E-values"]
+    F --> G["Ordered hits + coverage filters + statistics"]
+    B --> H["Memory-budgeted or HydraMPP shards"]
+    H --> C
+```
+
+Sequence searches apply composition-bias correction and scoring masks by default.
+Shards use whole-database E-values; GPU slots are for scheduling only.
+
+---
+
+# 🦀 Tech Stack
+
+| Component               | Technology                          |
+| ----------------------- | ----------------------------------- |
+| Core engine             | Rust (edition 2021, declared MSRV 1.89)      |
+| Parallelism             | rayon                               |
+| Compressed input        | flate2 — streamed gzip FASTA         |
+| Persistent index        | memmap2 — memory-mapped `.stidx`     |
+| SIMD                    | striped AVX2 / SSE2 (AVX-512 opt-in) with runtime dispatch; batched SIMD ungapped evidence |
+| Distributed (optional)  | hydra-mpp-core 1.0 (RAW-lab HydraMPP, crates.io)    |
+| Serialization (optional)| serde + bincode                     |
+| CLI                     | hand-rolled, zero-dependency        |
+
+The **default build depends on `rayon`, `flate2`, and `memmap2`.** The distributed backend dependencies
+(`hydra-mpp-core`, `serde`, `bincode`) are behind the opt-in `distributed` feature.
+
+---
+
+# 🚀 Installation
+
+## 1️⃣ Install Rust
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default stable
+```
+
+Sabertooth 0.4 needs **Rust 1.89 or newer** (`rustup update stable`); distribution
+packages of `cargo` (e.g. Ubuntu's apt) are often older.
+
+## 2️⃣ Install Sabertooth
+
+### From crates.io
+
+```bash
+cargo install sabertooth
+```
+
+### From source
+
+```bash
+git clone https://github.com/raw-lab/sabertooth
+cd sabertooth
+cargo install --path .
+```
+
+### With the optional distributed backend
+
+```bash
+cargo install sabertooth --features distributed
+```
+
+---
+
+## 🛠️ Build & Self-check
 
 ```bash
 cargo build --release                       # sabertooth binary in target/release/
@@ -114,7 +282,11 @@ AVX-512 kernels exist but are opt-in with `SABERTOOTH_SIMD=avx512` because
 they were not faster on either benchmark CPU — 6% slower on host B; other
 architectures use the exact scalar kernels).
 
-## Quick start
+---
+
+# ⚡ Quick Start
+
+## 💾 Build Once, Search Repeatedly
 
 ```bash
 sabertooth makedb proteins.fasta.gz protDB          # sequence database (MMseqs2 format)
@@ -122,7 +294,67 @@ sabertooth createindex protDB --memory-limit 2G     # persistent seed index prot
 sabertooth search queries.fasta protDB --out hits.m8 --stats-json stats.json
 ```
 
-## Databases and indexes — two separate steps
+## 🧬 Profile (PSSM) search
+
+```bash
+# build a PSSM from an MSA, then search it against a target DB
+sabertooth msa2profile family.a3m --out family.pssm
+sabertooth profilesearch family.a3m proteins.fasta --out hits.m8 --evalue 1e-5
+```
+
+## 🔎 Sequence search
+
+```bash
+sabertooth search queries.fasta proteins.fasta -s 7.5 --out hits.m8
+```
+
+## 🧠 Translated (six-frame) search
+
+```bash
+sabertooth translatesearch contigs.fasta proteins.fasta --min-orf 30
+```
+
+## 🧫 Cluster
+
+```bash
+sabertooth cluster proteins.fasta --min-seq-id 0.5 --out clusters.tsv
+```
+
+## 🌳 Taxonomy (LCA)
+
+```bash
+sabertooth taxonomy queries.fasta proteins.fasta \
+    --nodes nodes.dmp --names names.dmp --seqmap seqid2taxid.tsv
+```
+
+---
+
+# 🧰 Commands
+
+| Command                       | What it does |
+| ----------------------------- | ------------ |
+| `createdb`                    | Validate + normalise a sequence FASTA |
+| `makedb` / `convert2fasta`    | Write / read the **MMseqs2 on-disk DB** (interoperable with `mmseqs`) |
+| `createindex` | Build a persistent, memory-budgeted `.stidx` seed index (`--index-layout auto\|sparse\|direct`) |
+| `indexinfo` | Inspect a seed index; `--verify` checks all section checksums |
+| `msa2profile`                 | Build a PSSM from an a3m / aligned-FASTA MSA |
+| `result2msa`                  | Search, then emit an **a3m MSA** per query |
+| `search`                      | Sequence-vs-sequence search |
+| `easysearch`                  | **Database-free** exhaustive SW (no prefilter index) |
+| `profilesearch`               | Profile (PSSM) search; `--num-iterations` for PSI-BLAST-style |
+| `profileprofile`              | **Profile-vs-profile** search (column co-emission) |
+| `translatesearch`             | **Six-frame** translated nucleotide search |
+| `cluster`                     | **Linclust-style** clustering (rep→member TSV) |
+| `taxonomy`                    | **LCA** taxonomic assignment from hits |
+| `align`                       | Pairwise local alignments |
+| `calibrate`                   | Monte-Carlo gapped Gumbel statistics (λ, K) |
+| `doctor` / `info` / `version` | Self-check, matrix report, banner |
+
+Run `sabertooth help` for the full flag list.
+
+---
+
+# 💾 Databases & Indexes
 
 | step | command | writes | notes |
 |---|---|---|---|
@@ -166,7 +398,9 @@ sabertooth search queries.fasta protDB --out hits.m8 --stats-json stats.json
   all 20⁶ codes plus group bases: 132 MB, from ~10 M residues), whichever
   `--index-layout auto` picks.
 
-## Searching
+---
+
+# 🔎 Searching
 
 ```bash
 sabertooth search  <query> <target> [options]   # prefiltered sequence search
@@ -174,7 +408,7 @@ sabertooth easysearch <query> <target>          # exhaustive Smith–Waterman (n
 sabertooth profilesearch <msa> <target>         # PSSM search (per-profile calibrated)
 ```
 
-### Sensitivity presets
+## 🎛️ Sensitivity Presets
 
 `-s` sets the similar-k-mer threshold and the per-window k-mer cap together
 (explicit `--kmer-score`, `--max-kmers` override); the ungapped gate follows
@@ -200,7 +434,7 @@ on these queries, so the table is in-sample; held-out numbers for `-s 2`,
 | 9 | 16 / 4096 | 14.78 | 0.2513 | 5371 / 2 | 9.90 | 0.2376 | 58.55 | 0.2241 | 4684 / 3 | 78.42 | 0.2198 |
 <!-- /table -->
 
-### Pipeline and what each knob means
+## ⚙️ Pipeline & Search Controls
 
 1. **Seeds.** For each query window the exact top-`--max-kmers` similar
    k-mers scoring ≥ `--kmer-score` (ties broken deterministically), plus the
@@ -258,7 +492,7 @@ written in input order; duplicate query identifiers stay separate records.
 Errors (unreadable or malformed input, a corrupt index or shard) end the run
 with a message and exit status 1; an `--out` file may then be incomplete.
 
-### Memory and threads
+## 🧠 Memory & Threads
 
 `--threads` (default: all cores) parallelises across queries, or across
 candidates for batches smaller than the thread count — never both.
@@ -287,24 +521,76 @@ which then apply per shard).
 collection, diagonal evidence, gapped scoring, traceback), every prefilter
 and alignment counter, the memory plan, peak RSS and page faults.
 
-## Distributed search (`--features distributed`)
+---
+
+# 📊 Comparison with MMseqs2
+
+Sabertooth targets the **profile/PSSM sensitivity path**, then extends outward. Legend:
+✅ implemented · ⚠️ partial (scope noted) · ❌ not implemented.
+
+| Capability | MMseqs2 | Sabertooth |
+| --- | :---: | --- |
+| Substitution-matrix reconstruction | ✅ | ✅ (cell-identical) |
+| PSSM / profile construction | ✅ | ✅ (635/700 exact cells in reference validation) |
+| a3m / aligned-FASTA MSA input | ✅ | ✅ |
+| K-mer + similar-k-mer prefilter | ✅ | ✅ (exact top-N enumeration, scalar) |
+| Spaced seeds + sensitivity (`-s`) | ✅ | ✅ (spaced `111001101` by default; `--spaced`, `--k`, `-s`) |
+| Ungapped diagonal prefilter | ✅ | ✅ (batched SIMD segment evidence; gate follows the database size) |
+| Smith–Waterman–Gotoh gapped alignment | ✅ | ✅ |
+| Banded alignment (long sequences) | ✅ | ✅ (`--band`) |
+| Karlin–Altschul E-values | ✅ | ✅ (calibrated gapped λ / K + length correction) |
+| Profile search (PSSM vs sequences) | ✅ | ✅ |
+| Sequence search | ✅ | ✅ |
+| BLAST-tab `.m8` output | ✅ | ✅ |
+| SIMD-striped alignment kernel | ✅ | ✅ (AVX2 / SSE2, runtime dispatch; AVX-512 opt-in) |
+| Gapped-statistics calibration | ✅ (ALP) | ✅ (Monte-Carlo Gumbel; `calibrate`) |
+| Iterative profile search | ✅ | ✅ (`--num-iterations`) |
+| MSA generation (`result2msa`) | ✅ | ✅ (a3m) |
+| Clustering / linclust | ✅ | ✅ (minimizer + greedy set-cover) |
+| Taxonomy (LCA) | ✅ | ✅ (nodes.dmp + weighted LCA) |
+| Profile–profile search | ✅ | ✅ (column co-emission) |
+| Nucleotide / translated search | ✅ | ✅ (6-frame ORFs) |
+| On-disk sequence DB | ✅ | ✅ (**verified interop with `mmseqs`**) |
+| On-disk profile DB (`dbtype 2`) | ✅ | ❌ (rejected with a message; 0.2's read-only `profiledb2pssm` is not in 0.3+) |
+| Database-free / streaming search | ✅ (`easy-search`) | ✅ (index-free exhaustive SW) |
+| Distributed (multi-node) execution | ✅ (MPI) | ✅ (HydraMPP; single-host parity tested, multi-node unbenchmarked) |
+| GPU support | ✅ (GPU SW kernel) | ⚠️ GPU-aware **scheduling + pinning** only (no CUDA kernel yet) |
+
+**Two honest scope notes.** The GPU path is GPU-aware *scheduling and device pinning* via
+HydraMPP — the exact hook a CUDA aligner would slot into — but the SW math still runs on
+the SIMD CPU kernel. And MMseqs2 profile databases are not read by this release (0.2 had a
+read-only decoder). See [`COMPARISON.md`](COMPARISON.md) for the full discussion.
+
+---
+
+# 🧪 Validation — verified against the *real* `mmseqs`
+
+Validation is against a **compiled `mmseqs` binary**, not a second reimplementation.
+
+| Quantity (profile PSSM) | Agreement with MMseqs2 |
+| --- | --- |
+| Substitution-matrix cells | **400 / 400 exact** |
+| PSSM cells, exact | **635 / 700 (90.7%)** |
+| PSSM cells, within 1 quantization unit | **697 / 700 (99.6%)** |
+| Profile-search hits & ranking | **same homologs, same order** |
+
+**On-disk format interoperability — both directions:**
 
 ```bash
-sabertooth search q.fasta protDB --distributed --shards 8     # local cores
-sabertooth search q.fasta protDB --distributed --shards 32 --hydra-host   # head
-sabertooth search q.fasta protDB --distributed --shards 32 --hydra-client HEAD_IP  # workers
+sabertooth makedb proteins.fasta protDB      # mmseqs convert2fasta reads it ✅
+mmseqs     createdb proteins.fasta mmDB       # sabertooth convert2fasta reads it ✅
+# → sequences identical both ways
 ```
 
-The target index is cut into residue-balanced shards with their own
-persistent indexes (`--shard-dir`, reused while the manifest matches); query
-batches go to every shard with the complete parameter set; workers compute
-E-values for the whole database; hits are merged per query in the local
-engine's order and re-capped. **Output is byte-identical to a local search**
-(tested with 1, 2, 3, 5 and 7 shards). On a cluster the shard directory must be on shared
-storage. `--gpus N` reserves GPU slots for scheduling/pinning only — there is
-no GPU kernel; all alignment runs on CPUs.
+These are the earlier reference-validation results (v0.1–v0.2; details, including the
+profile-DB decode of 0.2, in [`VALIDATION.md`](VALIDATION.md)). Since v0.3 the search
+path uses calibrated gapped statistics with length correction, and profile searches
+calibrate λ and K per PSSM; profile search is not part of the comparative benchmarks
+below.
 
-## Benchmarks
+---
+
+# 📊 Benchmarks
 
 Methodology, datasets (with checksums) and commands:
 [`bench/README.md`](bench/README.md). Hosts: the tuning, the database-size
@@ -312,12 +598,12 @@ series (with its 1 GiB-machine runs) and the SCOPe40 held-out suites ran on
 a 2-vCPU Xeon @ 2.8 GHz VM (host A); after a container restart the preset
 table, the 512 MiB / 256 MiB / cold-cache table, the index-layout comparison
 and the A/B runs (including MMseqs2's memory options on a 1 GiB machine) ran
-on a 2-vCPU Xeon @ 2.1 GHz VM (host B). Every timed
-row comes from the host its table or section names (`bench/ENVIRONMENT.md`,
+on a 2-vCPU Xeon @ 2.1 GHz VM (host B). Every timed row comes from the host
+its table or section names (`bench/ENVIRONMENT.md`,
 `bench/results/v0.4/HOSTS.md`; the untimed null table mixes both); timings
 from different hosts are not comparable — the same development binaries and
-search ran 1.3–1.4× faster on host B
-(`bench/results/v0.4/dev/ab_pf.*` vs `ab/prefetch/`). 8 GiB RAM, no swap,
+search ran 1.3–1.4× faster on host B (`bench/results/v0.4/dev/ab_pf.*` vs
+`ab/prefetch/`). 8 GiB RAM, no swap,
 2 threads unless marked; E ≤ 10 and ≤ 4,000 hits per query for every tool
 (full precision–recall range), each tool on its own prebuilt database and
 index. Timed runs are medians of 3 measured runs after an unmeasured warm-up
@@ -333,7 +619,7 @@ layout and A/B runs, tuning, development records). The tables below are
 generated from them by `bench/readme_tables_v04.py` and
 `bench/series_tables.py`.
 
-### Scaling: Sabertooth vs MMseqs2 from 2.6 M to 265 M residues
+## 📈 Scaling: Sabertooth vs MMseqs2 from 2.6 M to 265 M residues
 
 Every database is SCOPe40 (14,323 domains, the only true homologs) plus
 order-2 Markov proteins with SCOPe composition and lengths (filler hits are
@@ -351,7 +637,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | Sabertooth 0.4 | Sabertooth v0.4.0 | `48c9d9d45bd5a526…` |
 | Sabertooth 0.3 | Sabertooth v0.3.0 | `549806e86771203e…` |
 
-#### 2.6 M residues (SCOPe40 only)
+### 2.6 M residues (SCOPe40 only)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -381,7 +667,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.78× | +32.8% | 16.28× |
 | `-s 7.5` | 1.35× | +5.1% | 28.36× |
 
-#### 17 M residues (SCOPe40 + filler)
+### 17 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -411,7 +697,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.97× | +25.4% | 4.37× |
 | `-s 7.5` | 2.03× | +0.6% | 7.85× |
 
-#### 34 M residues (SCOPe40 + filler)
+### 34 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -441,7 +727,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.87× | +23.2% | 3.56× |
 | `-s 7.5` | 1.83× | -0.5% | 6.13× |
 
-#### 68 M residues (SCOPe40 + filler)
+### 68 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -475,7 +761,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.87× | +20.0% | 2.82× |
 | `-s 7.5` | 1.49× | -2.2% | 5.03× |
 
-#### 134 M residues (SCOPe40 + filler)
+### 134 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -505,7 +791,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 1.00× | +19.1% | 2.24× |
 | `-s 7.5` | 1.02× | -3.1% | 4.05× |
 
-#### 265 M residues (SCOPe40 + filler)
+### 265 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -537,7 +823,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.88× | +17.0% | 1.87× |
 | `-s 7.5` | 0.68× | -3.5% | 3.52× |
 
-#### Matched sensitivity
+### Matched sensitivity
 
 Wall time each tool needs to reach the other default's AUC1, interpolated (log wall time linear in AUC1) between that tool's measured `-s` settings; “>” = not reached by its most sensitive measured setting, “≤” = already exceeded by its fastest.
 
@@ -550,7 +836,7 @@ Wall time each tool needs to reach the other default's AUC1, interpolated (log w
 | 134 M | 0.1529 / 10.80 | 4.31 | Sabertooth 2.5× faster | 0.1822 / 10.79 | 22.89 | MMseqs2 2.1× slower |
 | 265 M | 0.1519 / 18.15 | 7.92 | Sabertooth 2.3× faster | 0.1777 / 20.66 | 32.00 | MMseqs2 1.5× slower |
 
-#### Scaling with database size
+### Scaling with database size
 
 Wall time (s) per size; exponent b of wall ∝ residues^b (least squares over 17, 34, 68, 134, 265 M).
 
@@ -614,7 +900,7 @@ Wall time (s) per size; exponent b of wall ∝ residues^b (least squares over 17
   default k-mer settings: gate 34 instead of 43 gives AUC1 +3.7% for +81%
   modelled CPU, `bench/results/v0.4/tuning/s265_sp9`).
 
-### Held-out homology search on SCOPe40 (all tools)
+## 🏁 Held-out Homology Search on SCOPe40 (all tools)
 
 Host A (timings); the null rows are accuracy only.
 
@@ -673,7 +959,7 @@ Host A (timings); the null rows are accuracy only.
   run (disputable labels), so differences of a few FPs at E ≤ 1e-3 carry
   little signal; FP at matched recall 0.08–0.10 separates the settings.
 
-### False-positive controls
+## 🛡️ False-positive Controls
 
 Host A.
 
@@ -700,7 +986,7 @@ correction, hard masking of low-complexity query positions in scoring) are
 unchanged from v0.3; their per-control effect is in v0.3's ablations
 (`bench/results/tune.json`, `CHECKLIST.md` 6.12).
 
-### Fragments and two-domain queries
+## 🧬 Fragments & Two-domain Queries
 
 Host A.
 
@@ -736,7 +1022,7 @@ Host A.
 | dm_ultra | 11.58 | 59 | 0.1755 | 13384 | 7 | 0.0005 | 969 | 3 | 3 | 3 | 5 |
 <!-- /table -->
 
-### E-value calibration on null data
+## 🧪 E-value Calibration on Null Data
 
 Accuracy only (no timings): host A, except v0.3's `null_db` rows (host B).
 
@@ -771,7 +1057,7 @@ slightly conservative); the prefiltered search is more conservative because
 the prefilter drops most chance alignments. The statistics are unchanged
 from v0.3.
 
-### Limited RAM and cold cache (68 M residues)
+## 🚀 Limited RAM & Cold Cache (68 M residues)
 
 Host B, tuning queries (as in v0.3); the database files are evicted before
 each of 3 measured runs, after a one-query run that builds the out-of-core
@@ -820,7 +1106,9 @@ outside the limit and builds v0.3's shards):
   231 / 90 MiB, within the same limits.
 * **Cold page cache**: 4.5 s vs v0.3's 16.6 s.
 
-## Trade-offs and limitations
+---
+
+# ⚖️ Trade-offs & Limitations
 
 Measured, not hidden:
 
@@ -928,7 +1216,98 @@ Measured, not hidden:
 * **MSRV.** `rust-version = "1.89"` is declared; only rustc 1.97 was used.
 * **No GPU computation.** `--gpus` only reserves and pins devices.
 
-## Layout
+---
+
+# 🌐 Distributed & GPU-aware scaling (optional)
+
+```bash
+sabertooth search q.fasta protDB --distributed --shards 8     # local cores
+sabertooth search q.fasta protDB --distributed --shards 32 --hydra-host   # head
+sabertooth search q.fasta protDB --distributed --shards 32 --hydra-client HEAD_IP  # workers
+```
+
+The target index is cut into residue-balanced shards with their own
+persistent indexes (`--shard-dir`, reused while the manifest matches); query
+batches go to every shard with the complete parameter set; workers compute
+E-values for the whole database; hits are merged per query in the local
+engine's order and re-capped. **Output is byte-identical to a local search**
+(tested with 1, 2, 3, 5 and 7 shards). On a cluster the shard directory must be on shared
+storage. `--gpus N` reserves GPU slots for scheduling/pinning only — there is
+no GPU kernel; all alignment runs on CPUs.
+
+Multi-node operation and distributed performance have not been benchmarked; the
+reported parity tests used HydraMPP on one host.
+
+---
+
+# 📚 Library Usage
+
+Sabertooth is also a library crate. This example reproduces the CLI's default
+sequence search (`sabertooth search queries.fasta proteins.fasta`) hit for hit:
+
+```rust
+use sabertooth::{
+    evalue::EValueParams,
+    fasta::SeqDb,
+    index::{BuildOptions, SeedIndex},
+    mask::MaskParams,
+    matrix::SubstitutionMatrix,
+    prefilter::{size_adjusted_gate, SeedPattern},
+    search::{search_sequences, SearchParams},
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mat = SubstitutionMatrix::blosum62();
+    let query = SeqDb::read_fasta("queries.fasta", &mat.aa2num)?;
+    let target = SeqDb::read_fasta("proteins.fasta", &mat.aa2num)?;
+
+    // The seed index `createindex` writes, built in memory: default spaced
+    // seed 111001101, low-complexity target regions masked.
+    let mut opts = BuildOptions::new(SeedPattern::sequence_default());
+    opts.mask = Some(MaskParams::default());
+    let (index, _) = SeedIndex::build_transient(&target, &opts)?;
+
+    // CLI defaults (-s 5.7): the ungapped gate follows the database size,
+    // E-values use the calibrated gapped statistics.
+    let mut params = SearchParams::sequence_default();
+    params.prefilter.mask = opts.mask; // low-complexity query windows are not seeded
+    params.prefilter.min_diag_score =
+        size_adjusted_gate(params.prefilter.min_diag_score, target.total_residues);
+    let ev = EValueParams::sequence(params.gaps, params.comp_bias_corr,
+                                    target.total_residues, target.len())?;
+
+    for hit in search_sequences(&query, &target, &index, &mat, &ev, params) {
+        println!("{}", hit.to_m8());
+    }
+    Ok(())
+}
+```
+
+A persistent index opens with `SeedIndex::open(path)`.
+
+---
+
+# 🧪 Testing
+
+```bash
+cargo test                       # default build
+cargo test --features distributed
+cargo test --release
+cargo test --release --features distributed
+./target/release/sabertooth doctor
+```
+
+Covers: matrix & PSSM cell-identity vs the reference, prefilter seeding, the size-adjusted
+gate and presets, every SIMD kernel (SSE2 / SSSE3 / AVX2 / AVX-512) against scalar
+references, gapped/banded alignment and exact traceback, E-values and calibration, index
+layouts and format-1 compatibility (including byte-for-byte reproduction of v0.3's
+output), out-of-core sharding and distributed parity (byte-identical output), six-frame
+translation, profile–profile scoring, linclust, the MMseqs2 DB reader/writer, and LCA
+taxonomy — run in **both debug and release**.
+
+---
+
+# 🗂️ Project Layout
 
 ```
 src/
@@ -939,6 +1318,7 @@ src/
   simd.rs align.rs            striped SW kernels (SSE2/AVX2/AVX-512, u8/i16), canonical traceback
   compbias.rs evalue.rs       composition-bias correction, calibrated statistics
   search.rs                   staged search engine (sequence + profile)
+  shard.rs                    out-of-core shards (memory-budgeted search)
   distributed.rs              HydraMPP backend (feature `distributed`)
   main.rs metrics.rs          CLI, memory plan, stats JSON
   profile.rs msa.rs matrix.rs alphabet.rs nucl.rs cluster.rs taxonomy.rs
@@ -948,11 +1328,69 @@ bench/                        dataset generators, benchmark drivers (run_suite.p
 bench/tuning/                 gate replay, cost model and frontier scripts behind the v0.4 defaults
 ```
 
-## License / provenance
+---
 
-Reimplements algorithms of MMseqs2 (Steinegger & Söding, *Nat. Biotechnol.*
-2017) from their published description and open-source formulas; the bundled
-`blosum62.out` comes from the MMseqs2 distribution (GPL-3.0), so treat this
-code as GPL-3.0. (`Cargo.toml` declares `license = "MIT"`; the mismatch is
-pre-existing and left for the owner to resolve.) Earlier design notes: `COMPARISON.md`, `HARDENING.md`,
-`STEPS.md`, `VALIDATION.md` (historical, v0.1–v0.2).
+# 📄 License
+
+**Creative Commons Attribution-NonCommercial (CC BY-NC 4.0)** — academic and
+non-commercial use is free; commercial use requires prior written permission.
+Commercial licensing inquiries → Richard Allen White III (`rwhit101@charlotte.edu`).
+See the [`LICENSE`](LICENSE) file for details.
+
+Third-party data: `src/data/blosum62.out` (the BLOSUM62 matrix of Henikoff & Henikoff,
+1992, in half-bit units) is copied from the MMseqs2 distribution (GPL-3.0) and keeps its
+original terms. Sabertooth reimplements MMseqs2's algorithms from their published
+description; earlier design notes: [`COMPARISON.md`](COMPARISON.md),
+[`HARDENING.md`](HARDENING.md), `STEPS.md`, [`VALIDATION.md`](VALIDATION.md)
+(historical, v0.1–v0.2).
+
+---
+
+# 📖 Citation
+
+If you use **Sabertooth** in published work, please cite:
+
+```text
+White III RA et al.
+Sabertooth: a pure-Rust reimplementation of the MMseqs2 profile/PSSM search core.
+RAW Lab, UNC Charlotte.
+```
+
+Sabertooth reimplements the search core of **MMseqs2**; please also cite:
+
+```text
+Steinegger M & Söding J. MMseqs2 enables sensitive protein sequence searching
+for the analysis of massive data sets. Nat Biotechnol 35, 1026–1028 (2017).
+```
+
+---
+
+# 🤝 Contributing
+
+We welcome:
+
+* 🧬 New MMseqs2-parity features (profile-DB reading/writing, cascaded clustering)
+* ⚡ Performance work (faster similar-k-mer enumeration, cheaper high-sensitivity seeding, NEON, a GPU SW kernel)
+* 🌳 Taxonomy & database tooling
+* 🦀 Rust ecosystem integrations
+
+Pull requests and issues are encouraged.
+
+---
+
+# 📞 Support
+
+* 🐛 **Issues:** [Sabertooth Issues](https://github.com/raw-lab/sabertooth/issues)
+* 📧 **Contact:** [Dr. Richard Allen White III](mailto:rwhit101@uncc.edu)
+
+---
+
+<div align="center">
+
+# 🗡️ Sabertooth
+
+### *Fast. Faithful. Pure Rust.*
+
+Built with ❤️ in Rust by the [RAW Lab](https://www.rawlab.org).
+
+</div>

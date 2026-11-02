@@ -326,7 +326,7 @@ def tables():
         import io
         buf = io.StringIO()
         sys.stdout = buf
-        sys.argv = ['series_tables.py', A.series, '--level', '4']
+        sys.argv = ['series_tables.py', A.series, '--level', '3']
         ST.main()
         md = buf.getvalue()
     finally:

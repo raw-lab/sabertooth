@@ -188,7 +188,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | Sabertooth 0.4 | Sabertooth v0.4.0 | `48c9d9d45bd5a526…` |
 | Sabertooth 0.3 | Sabertooth v0.3.0 | `549806e86771203e…` |
 
-#### 2.6 M residues (SCOPe40 only)
+### 2.6 M residues (SCOPe40 only)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -218,7 +218,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.78× | +32.8% | 16.28× |
 | `-s 7.5` | 1.35× | +5.1% | 28.36× |
 
-#### 17 M residues (SCOPe40 + filler)
+### 17 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -248,7 +248,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.97× | +25.4% | 4.37× |
 | `-s 7.5` | 2.03× | +0.6% | 7.85× |
 
-#### 34 M residues (SCOPe40 + filler)
+### 34 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -278,7 +278,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.87× | +23.2% | 3.56× |
 | `-s 7.5` | 1.83× | -0.5% | 6.13× |
 
-#### 68 M residues (SCOPe40 + filler)
+### 68 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -312,7 +312,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.87× | +20.0% | 2.82× |
 | `-s 7.5` | 1.49× | -2.2% | 5.03× |
 
-#### 134 M residues (SCOPe40 + filler)
+### 134 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -342,7 +342,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 1.00× | +19.1% | 2.24× |
 | `-s 7.5` | 1.02× | -3.1% | 4.05× |
 
-#### 265 M residues (SCOPe40 + filler)
+### 265 M residues (SCOPe40 + filler)
 
 | configuration | wall s (min–max) | CPU s | peak RSS MiB | AUC1 | TP / FP at E ≤ 1e-3 | FP at recall 0.06 / 0.08 / 0.10 |
 |---|---|---|---|---|---|---|
@@ -374,7 +374,7 @@ Queries: `q_eval1k.fa` (sha256 e153440d7e45…), 2 threads unless stated, median
 | `-s 5.7` | 0.88× | +17.0% | 1.87× |
 | `-s 7.5` | 0.68× | -3.5% | 3.52× |
 
-#### Matched sensitivity
+### Matched sensitivity
 
 Wall time each tool needs to reach the other default's AUC1, interpolated (log wall time linear in AUC1) between that tool's measured `-s` settings; “>” = not reached by its most sensitive measured setting, “≤” = already exceeded by its fastest.
 
@@ -387,7 +387,7 @@ Wall time each tool needs to reach the other default's AUC1, interpolated (log w
 | 134 M | 0.1529 / 10.80 | 4.31 | Sabertooth 2.5× faster | 0.1822 / 10.79 | 22.89 | MMseqs2 2.1× slower |
 | 265 M | 0.1519 / 18.15 | 7.92 | Sabertooth 2.3× faster | 0.1777 / 20.66 | 32.00 | MMseqs2 1.5× slower |
 
-#### Scaling with database size
+### Scaling with database size
 
 Wall time (s) per size; exponent b of wall ∝ residues^b (least squares over 17, 34, 68, 134, 265 M).
 
