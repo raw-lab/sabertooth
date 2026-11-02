@@ -1,0 +1,77 @@
+{
+ "tool": "sabertooth",
+ "db": "null",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.3.0",
+   "makedb",
+   "/home/claude/bench_data/ds_scale/db_null.fa",
+   "/home/claude/suites/v0.3/null/dbs/st_null"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.029287917001056485,
+   "median": 0.029287917001056485,
+   "max": 0.029287917001056485,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 11530240,
+   "median": 11530240,
+   "max": 11530240
+  },
+  "runs": [
+   {
+    "wall_s": 0.029287917001056485,
+    "exit": 0,
+    "peak_rss_bytes": 11530240,
+    "user_s": 0.017745999999999998,
+    "sys_s": 0.004436,
+    "minor_faults": 641,
+    "major_faults": 0,
+    "stderr_tail": "makedb: wrote 14323 sequences to /home/claude/suites/v0.3/null/dbs/st_null{,.index,.dbtype,_h,_h.index,.lookup,.source} (amino acid)\n  (sequence database only; build the seed index with `sabertooth createindex /home/claude/suites/v0.3/null/dbs/st_null`)\n",
+    "rep": 0
+   }
+  ]
+ },
+ "createindex": {
+  "label": "createindex",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.3.0",
+   "createindex",
+   "/home/claude/suites/v0.3/null/dbs/st_null",
+   "--threads",
+   "2"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.44517914400057634,
+   "median": 0.44517914400057634,
+   "max": 0.44517914400057634,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 65372160,
+   "median": 65372160,
+   "max": 65372160
+  },
+  "runs": [
+   {
+    "wall_s": 0.44517914400057634,
+    "exit": 0,
+    "peak_rss_bytes": 65372160,
+    "user_s": 0.448007,
+    "sys_s": 0.10366399999999999,
+    "minor_faults": 18708,
+    "major_faults": 0,
+    "stderr_tail": "createindex: 14323 sequences, 2611087 residues -> /home/claude/suites/v0.3/null/dbs/st_null.stidx (2428288 postings, 2307002 distinct 6-mers, 86679 masked residues, 1 partition(s), 41.5 MiB) in 441.94ms; peak RSS 62.3 MiB\n",
+    "rep": 0
+   }
+  ]
+ },
+ "index_bytes": 43487512,
+ "db_bytes": 47122358
+}

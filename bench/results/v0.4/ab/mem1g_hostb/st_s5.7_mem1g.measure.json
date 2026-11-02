@@ -1,0 +1,84 @@
+{
+ "label": "st_s5.7_mem1g",
+ "cmd": [
+  "/home/claude/bin/sabertooth-0.4.0",
+  "search",
+  "/home/claude/bench_data/series/q_eval1k.fa",
+  "/home/claude/ab_work/st68",
+  "--evalue",
+  "10",
+  "--max-hits",
+  "4000",
+  "--threads",
+  "2",
+  "--memory-limit",
+  "1G",
+  "--out",
+  "/home/claude/ab_out/mem1g_hostb/st_s5.7_mem1g.m8"
+ ],
+ "repeat": 3,
+ "warmup_wall_s": [
+  6.092578210999818
+ ],
+ "wall_s": {
+  "min": 4.741693497000597,
+  "median": 4.753248339000493,
+  "max": 4.910113315999297,
+  "stdev": 0.09407919608325815
+ },
+ "peak_rss_bytes": {
+  "min": 493690880,
+  "median": 493883392,
+  "max": 495210496
+ },
+ "runs": [
+  {
+   "wall_s": 4.741693497000597,
+   "exit": 0,
+   "peak_rss_bytes": 495210496,
+   "user_s": 9.071498,
+   "sys_s": 0.06602899999999999,
+   "minor_faults": 23886,
+   "major_faults": 141,
+   "stderr_tail": "search: 1000 queries x 374323 targets, 12517 hits in 4.74s\n",
+   "rep": 0,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 492072960,
+    "failcnt": 0
+   }
+  },
+  {
+   "wall_s": 4.910113315999297,
+   "exit": 0,
+   "peak_rss_bytes": 493883392,
+   "user_s": 9.278481,
+   "sys_s": 0.038287999999999996,
+   "minor_faults": 21938,
+   "major_faults": 138,
+   "stderr_tail": "search: 1000 queries x 374323 targets, 12517 hits in 4.90s\n",
+   "rep": 1,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 490786816,
+    "failcnt": 0
+   }
+  },
+  {
+   "wall_s": 4.753248339000493,
+   "exit": 0,
+   "peak_rss_bytes": 493690880,
+   "user_s": 9.09051,
+   "sys_s": 0.046492,
+   "minor_faults": 23130,
+   "major_faults": 140,
+   "stderr_tail": "search: 1000 queries x 374323 targets, 12517 hits in 4.75s\n",
+   "rep": 2,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 490528768,
+    "failcnt": 0
+   }
+  }
+ ]
+}

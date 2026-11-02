@@ -1,0 +1,234 @@
+{
+ "set": "evidence",
+ "queries": {
+  "fasta": "/home/claude/bench_data/ds_scale/q_tune.fa",
+  "sha256": "c0f2031d033b2ce9c7f1a55404335d525351bda42db1fe4f259ba846db7a99cf"
+ },
+ "target": "/home/claude/ab_work/st68",
+ "rounds": 3,
+ "threads": 2,
+ "host": {
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "cpus": 2,
+  "kernel": "6.18.44-fc-v139"
+ },
+ "binaries": {
+  "bin": {
+   "path": "/home/claude/bin/sabertooth-0.4.0",
+   "sha256": "48c9d9d45bd5a5269d7eb5ec41e164bf07a6d7a0c194d78654b56bdb4a86ecd9"
+  }
+ },
+ "variants": {
+  "window48": {
+   "command": [
+    "/home/claude/bin/sabertooth-0.4.0",
+    "search",
+    "/home/claude/bench_data/ds_scale/q_tune.fa",
+    "/home/claude/ab_work/st68",
+    "--evalue",
+    "10",
+    "--max-hits",
+    "4000",
+    "--threads",
+    "2",
+    "--out",
+    "<hits>",
+    "--stats-json",
+    "<stats>"
+   ],
+   "env": {},
+   "hits_sha256": "a13f4bea49a8bd78a01697156f289227854aa7e5100489d1eb576caebade1b4c",
+   "wall_s": {
+    "median": 4.771687254000426,
+    "min": 4.6073654430001625,
+    "max": 4.78881976699995
+   },
+   "peak_rss_mib_max": 472.67578125,
+   "cpu_s": {
+    "diagonal_evidence": {
+     "min": 4.017001,
+     "max": 4.182084
+    },
+    "gapped_scoring": {
+     "min": 1.271928,
+     "max": 1.282882
+    },
+    "hit_collection_sort": {
+     "min": 1.368605,
+     "max": 1.466129
+    },
+    "prefilter": {
+     "min": 7.012221,
+     "max": 7.356299
+    },
+    "seed_generation": {
+     "min": 1.614352,
+     "max": 1.694605
+    },
+    "setup": {
+     "min": 0.049264,
+     "max": 0.050324
+    },
+    "traceback": {
+     "min": 0.813237,
+     "max": 0.831573
+    }
+   },
+   "auc1": 0.1930275485879436,
+   "tp_fp_1e-3": [
+    4130,
+    2
+   ],
+   "fp_at_recall": {
+    "0.04": 1,
+    "0.05": 1,
+    "0.06": 1,
+    "0.07": 5,
+    "0.08": 277,
+    "0.1": null
+   }
+  },
+  "whole_diagonal": {
+   "command": [
+    "/home/claude/bin/sabertooth-0.4.0",
+    "search",
+    "/home/claude/bench_data/ds_scale/q_tune.fa",
+    "/home/claude/ab_work/st68",
+    "--evalue",
+    "10",
+    "--max-hits",
+    "4000",
+    "--threads",
+    "2",
+    "--out",
+    "<hits>",
+    "--stats-json",
+    "<stats>",
+    "--diag-window",
+    "0"
+   ],
+   "env": {},
+   "hits_sha256": "dea69db3844d7c168899c8c06c62bc0633f902d5ddf8ee93f9f53f4338411fb9",
+   "wall_s": {
+    "median": 5.267237936999663,
+    "min": 5.160142818000168,
+    "max": 5.3546961289994215
+   },
+   "peak_rss_mib_max": 471.44140625,
+   "cpu_s": {
+    "diagonal_evidence": {
+     "min": 5.018457,
+     "max": 5.213079
+    },
+    "gapped_scoring": {
+     "min": 1.267346,
+     "max": 1.309228
+    },
+    "hit_collection_sort": {
+     "min": 1.426339,
+     "max": 1.517211
+    },
+    "prefilter": {
+     "min": 8.10539,
+     "max": 8.435795
+    },
+    "seed_generation": {
+     "min": 1.647313,
+     "max": 1.692107
+    },
+    "setup": {
+     "min": 0.049441,
+     "max": 0.050353
+    },
+    "traceback": {
+     "min": 0.830051,
+     "max": 0.844999
+    }
+   },
+   "auc1": 0.19338737563801967,
+   "tp_fp_1e-3": [
+    4143,
+    2
+   ],
+   "fp_at_recall": {
+    "0.04": 1,
+    "0.05": 1,
+    "0.06": 1,
+    "0.07": 3,
+    "0.08": 258,
+    "0.1": null
+   }
+  },
+  "xdrop30": {
+   "command": [
+    "/home/claude/bin/sabertooth-0.4.0",
+    "search",
+    "/home/claude/bench_data/ds_scale/q_tune.fa",
+    "/home/claude/ab_work/st68",
+    "--evalue",
+    "10",
+    "--max-hits",
+    "4000",
+    "--threads",
+    "2",
+    "--out",
+    "<hits>",
+    "--stats-json",
+    "<stats>",
+    "--ungapped-xdrop",
+    "30"
+   ],
+   "env": {},
+   "hits_sha256": "2f66193f7a3fc0f8d1b9292dbcfc9b00561f7491c244573b322600f3e07b0d6b",
+   "wall_s": {
+    "median": 7.0493303089997426,
+    "min": 7.015314758999921,
+    "max": 7.094006635000369
+   },
+   "peak_rss_mib_max": 469.11328125,
+   "cpu_s": {
+    "diagonal_evidence": {
+     "min": 8.478618,
+     "max": 8.555412
+    },
+    "gapped_scoring": {
+     "min": 1.240429,
+     "max": 1.244794
+    },
+    "hit_collection_sort": {
+     "min": 1.64359,
+     "max": 1.681061
+    },
+    "prefilter": {
+     "min": 11.845548,
+     "max": 11.963525
+    },
+    "seed_generation": {
+     "min": 1.714691,
+     "max": 1.722634
+    },
+    "setup": {
+     "min": 0.049641,
+     "max": 0.050815
+    },
+    "traceback": {
+     "min": 0.827361,
+     "max": 0.855192
+    }
+   },
+   "auc1": 0.19318796358066112,
+   "tp_fp_1e-3": [
+    4131,
+    2
+   ],
+   "fp_at_recall": {
+    "0.04": 1,
+    "0.05": 1,
+    "0.06": 1,
+    "0.07": 5,
+    "0.08": 276,
+    "0.1": null
+   }
+  }
+ }
+}

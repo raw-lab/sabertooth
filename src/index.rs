@@ -58,13 +58,53 @@ use std::time::Instant;
 
 pub const MAGIC: [u8; 8] = *b"SBTIDX\0\x01";
 pub const FOOTER_MAGIC: [u8; 8] = *b"SBTIDXOK";
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
+/// Oldest format this build still reads (v1: 8-byte postings, sparse layout).
+pub const MIN_FORMAT_VERSION: u32 = 1;
 /// Alphabet id 1 = MMseqs2 amino-acid order `ACDEFGHIKLMNPQRSTVWY` + `X`.
 pub const ALPHABET_AA21: u32 = 1;
 const HEADER_SIZE: u64 = 4096;
 const FOOTER_SIZE: u64 = 16;
 const ALIGN: u64 = 64;
 const A: u64 = crate::alphabet::PROFILE_AA_SIZE as u64;
+
+/// Division by a power of 20 known only at run time, compiled to a
+/// multiply-shift per exponent instead of a hardware `div` (64-bit division
+/// was a measurable share of seed lookups and index builds).
+#[derive(Clone, Copy, Debug)]
+pub struct Pow20 {
+    e: u32,
+    v: u64,
+}
+
+impl Pow20 {
+    pub fn new(e: u32) -> Pow20 {
+        Pow20 { e, v: A.pow(e) }
+    }
+    /// The divisor, `20^e`.
+    #[inline(always)]
+    pub fn value(self) -> u64 {
+        self.v
+    }
+    #[inline(always)]
+    pub fn quot(self, x: u64) -> u64 {
+        match self.e {
+            0 => x,
+            1 => x / 20,
+            2 => x / 400,
+            3 => x / 8_000,
+            4 => x / 160_000,
+            5 => x / 3_200_000,
+            6 => x / 64_000_000,
+            7 => x / 1_280_000_000,
+            _ => x / self.v,
+        }
+    }
+    #[inline(always)]
+    pub fn modulo(self, x: u64) -> u64 {
+        x - self.quot(x) * self.v
+    }
+}
 
 /// Index file name for a database prefix or FASTA path.
 pub fn default_index_path(source: &str) -> PathBuf {
@@ -190,9 +230,24 @@ pub enum SectionKind {
     KmerTable = 6,
     BucketKmerStart = 7,
     BucketPostStart = 8,
+    /// direct layout: posting offset of every possible k-mer code (4 or 8
+    /// bytes), or — grouped offsets — its 16-bit offset relative to the start
+    /// of its group of [`OFFSET_GROUP`] codes
+    KmerOffsets = 9,
+    /// grouped direct offsets: posting offset of the first code of every group
+    KmerGroupBase = 10,
 }
 
-const SECTION_KINDS: [SectionKind; 8] = [
+/// Codes per group of the grouped direct offset table.
+pub const OFFSET_GROUP: usize = 64;
+
+/// The automatic layout choice takes the direct table whenever the sparse
+/// tables would exceed this size: they no longer fit any CPU cache, so every
+/// sparse lookup costs several dependent memory accesses where the direct
+/// table needs one (1.7× faster searches at 17 M residues, `bench/README.md`).
+pub const AUTO_DIRECT_MIN_SPARSE_BYTES: u64 = 64 << 20;
+
+const SECTION_KINDS: [SectionKind; 10] = [
     SectionKind::Residues,
     SectionKind::SeqOffsets,
     SectionKind::IdBytes,
@@ -201,6 +256,8 @@ const SECTION_KINDS: [SectionKind; 8] = [
     SectionKind::KmerTable,
     SectionKind::BucketKmerStart,
     SectionKind::BucketPostStart,
+    SectionKind::KmerOffsets,
+    SectionKind::KmerGroupBase,
 ];
 
 /// One section table entry.
@@ -283,6 +340,47 @@ pub struct IndexMeta {
     pub created_unix: u64,
     pub tool_version: String,
     pub sections: Vec<(SectionKind, Section)>,
+    /// k-mer lookup layout (format ≥ 2; v1 files are sparse)
+    pub layout: IndexLayout,
+    /// bytes per posting (1..=8) and bits of the position field: a posting is
+    /// the little-endian integer `(target << pos_bits) | position`
+    /// (v1 files: 8 bytes, 32 position bits)
+    pub posting_width: u32,
+    pub posting_pos_bits: u32,
+    /// bytes per entry of the direct offset table: 4 or 8, or 2 for grouped
+    /// offsets (16-bit offsets relative to group bases of 4 bytes, or 8 when
+    /// there are 2^32 postings or more); 0 = sparse
+    pub offset_width: u32,
+}
+
+/// How k-mer codes are resolved to posting ranges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexLayout {
+    /// Bucket tables + a sorted (suffix, offset) entry per distinct k-mer:
+    /// 8 bytes per distinct k-mer (small and medium databases).
+    Sparse,
+    /// One offset per possible k-mer code (`20^w + 1` entries): a lookup is
+    /// one contiguous read. Used when it is no larger than the sparse tables
+    /// (dense k-mer spaces, i.e. large databases).
+    Direct,
+}
+
+/// Layout requested for a build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutChoice {
+    /// The smaller of the two (ties: direct).
+    Auto,
+    Sparse,
+    Direct,
+}
+
+impl IndexLayout {
+    pub fn name(self) -> &'static str {
+        match self {
+            IndexLayout::Sparse => "sparse",
+            IndexLayout::Direct => "direct",
+        }
+    }
 }
 
 impl IndexMeta {
@@ -336,7 +434,7 @@ impl ByteWriter {
     fn fixed(&mut self, s: &[u8], n: usize) {
         let k = s.len().min(n);
         self.b.extend_from_slice(&s[..k]);
-        self.b.extend(std::iter::repeat(0u8).take(n - k));
+        self.b.extend(std::iter::repeat_n(0u8, n - k));
     }
 }
 
@@ -416,6 +514,14 @@ fn encode_header(m: &IndexMeta) -> Vec<u8> {
             None => w.fixed(&[], 32),
         }
     }
+    // format 2
+    w.u32(match m.layout {
+        IndexLayout::Sparse => 0,
+        IndexLayout::Direct => 1,
+    });
+    w.u32(m.posting_width);
+    w.u32(m.posting_pos_bits);
+    w.u32(m.offset_width);
     let used = w.b.len();
     assert!(used + 8 <= HEADER_SIZE as usize, "header overflow");
     w.b.resize(HEADER_SIZE as usize - 8, 0);
@@ -441,10 +547,10 @@ fn decode_header(b: &[u8], path: &str) -> io::Result<IndexMeta> {
     }
     let mut r = ByteReader { b, p: 8 };
     let version = r.u32();
-    if version != FORMAT_VERSION {
+    if !(MIN_FORMAT_VERSION..=FORMAT_VERSION).contains(&version) {
         return Err(invalid(format!(
-            "{}: index format version {} is not supported by this build (expects {}); rebuild with `sabertooth createindex`",
-            path, version, FORMAT_VERSION
+            "{}: index format version {} is not supported by this build (reads {}..={}); rebuild with `sabertooth createindex`",
+            path, version, MIN_FORMAT_VERSION, FORMAT_VERSION
         )));
     }
     let _hs = r.u32();
@@ -496,6 +602,23 @@ fn decode_header(b: &[u8], path: &str) -> io::Result<IndexMeta> {
             sections.push((kind, Section { offset, len, hash }));
         }
     }
+    let (layout, posting_width, posting_pos_bits, offset_width) = if version >= 2 {
+        let l = r.u32();
+        let pw = r.u32();
+        let pb = r.u32();
+        let ow = r.u32();
+        let layout = match l {
+            0 => IndexLayout::Sparse,
+            1 => IndexLayout::Direct,
+            _ => return Err(invalid(format!("{}: unknown index layout {}", path, l))),
+        };
+        if !(1..=8).contains(&pw) || pb > 32 || pb > pw * 8 || (layout == IndexLayout::Direct && ow != 2 && ow != 4 && ow != 8) {
+            return Err(invalid(format!("{}: bad posting/offset encoding in header (corrupt index)", path)));
+        }
+        (layout, pw, pb, ow)
+    } else {
+        (IndexLayout::Sparse, 8, 32, 0)
+    };
     Ok(IndexMeta {
         version,
         alphabet,
@@ -518,6 +641,10 @@ fn decode_header(b: &[u8], path: &str) -> io::Result<IndexMeta> {
         created_unix,
         tool_version,
         sections,
+        layout,
+        posting_width,
+        posting_pos_bits,
+        offset_width,
     })
 }
 
@@ -538,6 +665,15 @@ pub struct BuildOptions {
     /// Residues per `(w−1)`-prefix bucket at which the large-database bucket
     /// layout is used (see `prefix_len_for_size`; 0 forces it).
     pub large_prefix_threshold: u64,
+    /// k-mer lookup layout (default: see [`AUTO_DIRECT_MIN_SPARSE_BYTES`]).
+    pub layout: LayoutChoice,
+    /// Direct layout: store 16-bit offsets in groups of [`OFFSET_GROUP`] codes
+    /// (half the table) when every group's postings fit; `false` forces full
+    /// 4/8-byte offsets (tests).
+    pub direct_grouped: bool,
+    /// Force a posting width in bytes (tests; default: the smallest that
+    /// holds every (target, position)).
+    pub posting_width: Option<u32>,
 }
 
 impl BuildOptions {
@@ -548,6 +684,9 @@ impl BuildOptions {
             memory_budget: 1 << 30,
             tmp_dir: std::env::temp_dir(),
             large_prefix_threshold: LARGE_PREFIX_MIN_RESIDUES_PER_BUCKET,
+            layout: LayoutChoice::Auto,
+            direct_grouped: true,
+            posting_width: None,
         }
     }
 }
@@ -563,6 +702,11 @@ pub struct BuildStats {
     pub partitions: usize,
     pub partition_buffer_bytes: usize,
     pub bucket_table_bytes: usize,
+    /// "sparse" or "direct"
+    pub layout: &'static str,
+    pub posting_width: u32,
+    /// bytes of the k-mer lookup structures (sparse tables or direct offsets)
+    pub lookup_bytes: u64,
     pub file_bytes: u64,
     pub seconds_sequences: f64,
     pub seconds_count: f64,
@@ -906,7 +1050,7 @@ pub fn build_index(
 
     // the bucket layout depends on the database size (known now)
     let p = prefix_len_for_size(w, total, opts.large_prefix_threshold) as usize;
-    let suffix_space = A.pow((w - p) as u32);
+    let suffix_space = Pow20::new((w - p) as u32);
     let num_buckets = A.pow(p as u32) as usize;
 
     // ---- stage B: count occurrences per bucket ------------------------------
@@ -941,7 +1085,7 @@ pub fn build_index(
                 }
                 for st in 0..=(s.len() - span) {
                     if let Some(code) = window_ok(s0 as u64 + st as u64, st, s) {
-                        c[(code / suffix_space) as usize] += 1;
+                        c[suffix_space.quot(code) as usize] += 1;
                     }
                 }
             }
@@ -958,6 +1102,24 @@ pub fn build_index(
         );
     let num_postings: u64 = bucket_counts.iter().sum();
     stats.seconds_count = t1.elapsed().as_secs_f64();
+
+    // ---- posting encoding: (target << pos_bits) | position, `pw` bytes -----
+    let bits_for = |x: u64| 64 - x.leading_zeros();
+    let pos_bits = bits_for(max_len.saturating_sub(1));
+    let need_bits = bits_for(n_seqs - 1) + pos_bits;
+    let pw: u32 = match opts.posting_width {
+        Some(wd) => {
+            if !(1..=8).contains(&wd) || wd * 8 < need_bits {
+                return Err(invalid(format!(
+                    "posting width {} bytes cannot hold {} bits (targets and positions)",
+                    wd, need_bits
+                )));
+            }
+            wd
+        }
+        None => need_bits.div_ceil(8).clamp(1, 8),
+    };
+    let encode_posting = |p: u64| -> [u8; 8] { (((p >> 32) << pos_bits) | (p & 0xFFFF_FFFF)).to_le_bytes() };
 
     // ---- stage C: partitions of buckets -> postings + k-mer table ----------
     let t2 = Instant::now();
@@ -1000,7 +1162,7 @@ pub fn build_index(
                         }
                         for st in 0..=(s.len() - span) {
                             if let Some(code) = window_ok(s0 as u64 + st as u64, st, s) {
-                                let bk = (code / suffix_space) as usize;
+                                let bk = suffix_space.quot(code) as usize;
                                 if bk >= b_lo && bk < b_hi {
                                     c[bk - b_lo] += 1;
                                 }
@@ -1032,14 +1194,14 @@ pub fn build_index(
                     }
                     for st in 0..=(s.len() - span) {
                         if let Some(code) = window_ok(s0 as u64 + st as u64, st, s) {
-                            let bk = (code / suffix_space) as usize;
+                            let bk = suffix_space.quot(code) as usize;
                             if bk >= b_lo && bk < b_hi {
                                 let slot = cursor[bk - b_lo];
                                 cursor[bk - b_lo] += 1;
                                 // SAFETY: every (chunk, bucket) owns a disjoint
                                 // slot range computed by the prefix sums above.
                                 unsafe {
-                                    *bp.0.add(slot) = ((code % suffix_space) as u32, ((i as u64) << 32) | st as u64);
+                                    *bp.0.add(slot) = (suffix_space.modulo(code) as u32, ((i as u64) << 32) | st as u64);
                                 }
                             }
                         }
@@ -1081,7 +1243,7 @@ pub fn build_index(
                 w_kmer.write_all(&rel.to_le_bytes())?;
                 kmers += 1;
                 while j < sl.len() && sl[j].0 == suf {
-                    w_post.write_all(&sl[j].1.to_le_bytes())?;
+                    w_post.write_all(&encode_posting(sl[j].1)[..pw as usize])?;
                     j += 1;
                 }
             }
@@ -1112,46 +1274,177 @@ pub fn build_index(
     ));
     stats.seconds_postings = t2.elapsed().as_secs_f64();
 
-    // ---- stage D: tables, header, footer ------------------------------------
+    // ---- stage D: lookup tables, header, footer -----------------------------
     let t3 = Instant::now();
     cur = post_off + post_len;
     file.seek(SeekFrom::Start(cur))?;
-    let kstart = align_up(cur);
-    pad_to(&mut file, cur, kstart)?;
-    {
-        let mut fk = &f_kmer;
+    // decoders read 8 bytes per posting: keep 8 bytes of slack after the section
+    let codes = A.pow(w as u32);
+    let ow: u64 = if num_postings < u32::MAX as u64 { 4 } else { 8 };
+    let direct_ok = w <= 6;
+    let ss = suffix_space.value();
+    // offsets of every code 0..=codes (the last is the sentinel), streamed in
+    // code order from the (bucket, suffix, offset) entries
+    let dense_offsets = |f: &mut dyn FnMut(u64, u64) -> io::Result<()>| -> io::Result<()> {
+        let mut fk = io::BufReader::with_capacity(1 << 20, &f_kmer);
         fk.seek(SeekFrom::Start(0))?;
-        let copied = io::copy(&mut fk.take(kmer_len), &mut file)?;
-        if copied != kmer_len {
-            return Err(invalid("short copy of k-mer table".into()));
+        let mut next: u64 = 0;
+        let mut e = [0u8; 8];
+        for bk in 0..num_buckets {
+            let base_post = bucket_post_start[bk];
+            for _ in bucket_kmer_start[bk]..bucket_kmer_start[bk + 1] {
+                fk.read_exact(&mut e)?;
+                let suf = u32::from_le_bytes([e[0], e[1], e[2], e[3]]) as u64;
+                let rel = u32::from_le_bytes([e[4], e[5], e[6], e[7]]) as u64;
+                let code = bk as u64 * ss + suf;
+                while next <= code {
+                    f(next, base_post + rel)?;
+                    next += 1;
+                }
+            }
         }
-    }
-    sections.push((
-        SectionKind::KmerTable,
-        Section {
-            offset: kstart,
-            len: kmer_len,
-            hash: kmer_hash,
-        },
-    ));
-    cur = kstart + kmer_len;
-    for (kind, table) in [
-        (SectionKind::BucketKmerStart, &bucket_kmer_start),
-        (SectionKind::BucketPostStart, &bucket_post_start),
-    ] {
-        let start = align_up(cur);
-        pad_to(&mut file, cur, start)?;
+        while next <= codes {
+            f(next, num_postings)?;
+            next += 1;
+        }
+        Ok(())
+    };
+    let ngroups = (codes + 1).div_ceil(OFFSET_GROUP as u64);
+    let grouped_bytes = 2 * (codes + 1) + ow * ngroups;
+    let sparse_bytes = kmer_len + 16 * (num_buckets as u64 + 1);
+    let auto_direct = |direct_bytes: u64| direct_bytes <= sparse_bytes || sparse_bytes >= AUTO_DIRECT_MIN_SPARSE_BYTES;
+    let may_direct = direct_ok
+        && match opts.layout {
+            LayoutChoice::Sparse => false,
+            LayoutChoice::Direct => true,
+            LayoutChoice::Auto => auto_direct(grouped_bytes),
+        };
+    // grouped offsets need every group's postings (but its last code's) to
+    // fit 16 bits
+    let grouped = may_direct
+        && opts.direct_grouped
+        && {
+            let mut ok = true;
+            let mut gbase = 0u64;
+            dense_offsets(&mut |c, off| {
+                if (c as usize).is_multiple_of(OFFSET_GROUP) {
+                    gbase = off;
+                }
+                ok &= off - gbase <= u16::MAX as u64;
+                Ok(())
+            })?;
+            ok
+        };
+    let direct_bytes = if grouped { grouped_bytes } else { (codes + 1) * ow };
+    let layout = match opts.layout {
+        LayoutChoice::Sparse => IndexLayout::Sparse,
+        LayoutChoice::Direct => {
+            if !direct_ok {
+                return Err(invalid(format!("the direct layout supports seed weights up to 6 (got {})", w)));
+            }
+            IndexLayout::Direct
+        }
+        LayoutChoice::Auto => {
+            if may_direct && auto_direct(direct_bytes) {
+                IndexLayout::Direct
+            } else {
+                IndexLayout::Sparse
+            }
+        }
+    };
+    let kstart = align_up(cur + 8);
+    pad_to(&mut file, cur, kstart)?;
+    if layout == IndexLayout::Sparse {
+        {
+            let mut fk = &f_kmer;
+            fk.seek(SeekFrom::Start(0))?;
+            let copied = io::copy(&mut fk.take(kmer_len), &mut file)?;
+            if copied != kmer_len {
+                return Err(invalid("short copy of k-mer table".into()));
+            }
+        }
+        sections.push((
+            SectionKind::KmerTable,
+            Section {
+                offset: kstart,
+                len: kmer_len,
+                hash: kmer_hash,
+            },
+        ));
+        cur = kstart + kmer_len;
+        for (kind, table) in [
+            (SectionKind::BucketKmerStart, &bucket_kmer_start),
+            (SectionKind::BucketPostStart, &bucket_post_start),
+        ] {
+            let start = align_up(cur);
+            pad_to(&mut file, cur, start)?;
+            let mut hw = HashingWriter::new(BufWriter::with_capacity(1 << 20, &mut file));
+            for v in table.iter() {
+                hw.write_all(&v.to_le_bytes())?;
+            }
+            hw.flush()?;
+            let (h, l) = (hw.hasher.finish(), hw.written);
+            drop(hw);
+            sections.push((kind, Section { offset: start, len: l, hash: h }));
+            cur = start + l;
+        }
+        stats.lookup_bytes = kmer_len + 16 * (num_buckets as u64 + 1);
+    } else {
+        // offsets[c] = postings of all codes < c, for every code and a final
+        // sentinel: full-width entries, or 16-bit offsets relative to the
+        // first code of each group plus a table of group bases
         let mut hw = HashingWriter::new(BufWriter::with_capacity(1 << 20, &mut file));
-        for v in table.iter() {
-            hw.write_all(&v.to_le_bytes())?;
-        }
+        let mut chunk: Vec<u8> = Vec::with_capacity(1 << 20);
+        let mut bases: Vec<u64> = Vec::with_capacity(if grouped { ngroups as usize } else { 0 });
+        dense_offsets(&mut |c, off| {
+            if grouped {
+                if (c as usize).is_multiple_of(OFFSET_GROUP) {
+                    bases.push(off);
+                }
+                let rel = off - *bases.last().unwrap();
+                chunk.extend_from_slice(&(rel as u16).to_le_bytes());
+            } else if ow == 4 {
+                chunk.extend_from_slice(&(off as u32).to_le_bytes());
+            } else {
+                chunk.extend_from_slice(&off.to_le_bytes());
+            }
+            if chunk.len() >= (1 << 20) - 8 {
+                hw.write_all(&chunk)?;
+                chunk.clear();
+            }
+            Ok(())
+        })?;
+        hw.write_all(&chunk)?;
         hw.flush()?;
         let (h, l) = (hw.hasher.finish(), hw.written);
         drop(hw);
-        sections.push((kind, Section { offset: start, len: l, hash: h }));
-        cur = start + l;
+        sections.push((SectionKind::KmerOffsets, Section { offset: kstart, len: l, hash: h }));
+        cur = kstart + l;
+        stats.lookup_bytes = l;
+        if grouped {
+            debug_assert_eq!(bases.len() as u64, ngroups);
+            let start = align_up(cur);
+            pad_to(&mut file, cur, start)?;
+            let mut hw = HashingWriter::new(BufWriter::with_capacity(1 << 20, &mut file));
+            for &b in &bases {
+                if ow == 4 {
+                    hw.write_all(&(b as u32).to_le_bytes())?;
+                } else {
+                    hw.write_all(&b.to_le_bytes())?;
+                }
+            }
+            hw.flush()?;
+            let (h, l) = (hw.hasher.finish(), hw.written);
+            drop(hw);
+            sections.push((SectionKind::KmerGroupBase, Section { offset: start, len: l, hash: h }));
+            cur = start + l;
+            stats.lookup_bytes += l;
+        }
+        debug_assert_eq!(stats.lookup_bytes, direct_bytes);
     }
     stats.bucket_table_bytes = (num_buckets + 1) * 16 + num_buckets * 8;
+    stats.layout = layout.name();
+    stats.posting_width = pw;
     // footer
     let file_len = cur + FOOTER_SIZE;
     file.write_all(&FOOTER_MAGIC)?;
@@ -1177,6 +1470,14 @@ pub fn build_index(
             .unwrap_or(0),
         tool_version: crate::VERSION.to_string(),
         sections,
+        layout,
+        posting_width: pw,
+        posting_pos_bits: pos_bits,
+        offset_width: match layout {
+            IndexLayout::Direct if grouped => 2,
+            IndexLayout::Direct => ow as u32,
+            IndexLayout::Sparse => 0,
+        },
     };
     file.seek(SeekFrom::Start(0))?;
     file.write_all(&encode_header(&meta))?;
@@ -1271,15 +1572,28 @@ pub struct SeedIndex {
     map: Mmap,
     meta: IndexMeta,
     path: PathBuf,
-    suffix_space: u64,
+    suffix_space: Pow20,
     res: (usize, usize),
     seq_off: (usize, usize),
     id_bytes: (usize, usize),
     id_off: (usize, usize),
     postings: (usize, usize),
+    /// sparse layout: k-mer table and bucket tables (empty for direct)
     kmer: (usize, usize),
     bk: (usize, usize),
     bp: (usize, usize),
+    /// direct layout: offset table (empty for sparse) and its entry width
+    /// (2 = grouped 16-bit offsets relative to the group bases `kgrp`)
+    koff: (usize, usize),
+    koff_w: usize,
+    kgrp: (usize, usize),
+    kgrp_w: usize,
+    direct: bool,
+    /// posting decoding: `width` bytes, `(target << pos_bits) | position`
+    post_w: usize,
+    post_mask: u64,
+    pos_bits: u32,
+    pos_mask: u64,
     _transient: Option<TempFileGuard>,
     /// Lazily built presence bitmap (see [`SeedIndex::presence`]).
     presence: std::sync::OnceLock<Presence>,
@@ -1292,7 +1606,7 @@ pub struct SeedIndex {
 pub struct Presence {
     bits: Vec<u64>,
     /// code → bit index divisor (`20^(w − residues)`)
-    div: u64,
+    div: Pow20,
 }
 
 /// Residues covered by the presence bitmap.
@@ -1303,7 +1617,7 @@ impl Presence {
     #[inline]
     pub fn may_contain(&self, code: u64) -> bool {
         // b < 20^residues ≤ 64·bits.len() for every valid code
-        let b = code / self.div;
+        let b = self.div.quot(code);
         (self.bits[(b >> 6) as usize] >> (b & 63)) & 1 == 1
     }
 
@@ -1347,6 +1661,13 @@ impl SeedIndex {
         // SAFETY: index files are immutable after their atomic rename; callers
         // must not modify an index while it is in use.
         let map = unsafe { MmapOptions::new().map(&file)? };
+        // Ask for transparent huge pages: when the kernel reads the file into
+        // large folios (Linux, file THP), random seed lookups take far fewer
+        // TLB misses. Advisory only; harmless where unsupported.
+        #[cfg(target_os = "linux")]
+        {
+            let _ = map.advise(memmap2::Advice::HugePage);
+        }
         let meta = decode_header(&map[..HEADER_SIZE as usize], &p)?;
         let foot = &map[(flen - FOOTER_SIZE) as usize..];
         if foot[..8] != FOOTER_MAGIC
@@ -1373,16 +1694,43 @@ impl SeedIndex {
         let id_bytes = get(SectionKind::IdBytes)?;
         let id_off = get(SectionKind::IdOffsets)?;
         let postings = get(SectionKind::Postings)?;
-        let kmer = get(SectionKind::KmerTable)?;
-        let bk = get(SectionKind::BucketKmerStart)?;
-        let bp = get(SectionKind::BucketPostStart)?;
+        let direct = meta.layout == IndexLayout::Direct;
+        let (kmer, bk, bp, koff) = if direct {
+            ((0, 0), (0, 0), (0, 0), get(SectionKind::KmerOffsets)?)
+        } else {
+            (
+                get(SectionKind::KmerTable)?,
+                get(SectionKind::BucketKmerStart)?,
+                get(SectionKind::BucketPostStart)?,
+                (0, 0),
+            )
+        };
         // alignment / size validation once; accessors then build slices directly
-        for r in [seq_off, id_off, postings, bk, bp] {
+        for r in [seq_off, id_off, bk, bp] {
             cast_u64(&map[r.0..r.1]).map_err(|e| invalid(format!("{}: {}", p, e)))?;
         }
         cast_pairs(&map[kmer.0..kmer.1]).map_err(|e| invalid(format!("{}: {}", p, e)))?;
+        let koff_w = meta.offset_width as usize;
+        let (kgrp, kgrp_w) = if direct && koff_w == 2 {
+            (get(SectionKind::KmerGroupBase)?, if meta.num_postings < u32::MAX as u64 { 4 } else { 8 })
+        } else {
+            ((0, 0), 1)
+        };
+        if direct && (koff.0 % koff_w != 0 || kgrp.0 % kgrp_w != 0) {
+            return Err(invalid(format!("{}: misaligned k-mer offset table", p)));
+        }
+        let post_w = meta.posting_width as usize;
+        // 8-byte unaligned posting reads need 8 bytes after the section's start
+        // of the last entry (writers leave the slack)
+        if post_w < 8 && meta.num_postings > 0 && postings.1 + 8 > (flen - FOOTER_SIZE) as usize {
+            return Err(invalid(format!("{}: posting section lacks read slack (corrupt index)", p)));
+        }
         let idx = SeedIndex {
-            suffix_space: A.pow(meta.pattern.weight() as u32 - meta.prefix_len),
+            suffix_space: Pow20::new(meta.pattern.weight() as u32 - meta.prefix_len),
+            post_w,
+            post_mask: if post_w >= 8 { u64::MAX } else { (1u64 << (8 * post_w)) - 1 },
+            pos_bits: meta.posting_pos_bits,
+            pos_mask: (1u64 << meta.posting_pos_bits) - 1,
             map,
             meta,
             path: path.to_path_buf(),
@@ -1394,34 +1742,54 @@ impl SeedIndex {
             kmer,
             bk,
             bp,
+            koff,
+            koff_w,
+            kgrp,
+            kgrp_w,
+            direct,
             _transient: None,
             presence: std::sync::OnceLock::new(),
         };
         let m = &idx.meta;
         let n = m.num_seqs as usize;
-        let checks: [(bool, &str); 8] = [
+        let w = m.pattern.weight() as u32;
+        let mut checks: Vec<(bool, &str)> = vec![
             ((idx.res.1 - idx.res.0) as u64 == m.total_residues, "residue count"),
             (idx.seq_offsets().len() == n + 1, "sequence offsets"),
             (idx.id_offsets().len() == n + 1, "identifier offsets"),
-            (idx.postings_all().len() as u64 == m.num_postings, "posting count"),
-            (idx.kmer_table().len() as u64 == m.num_kmers, "k-mer count"),
-            (idx.bucket_kmer_start().len() as u64 == m.num_buckets + 1, "bucket table"),
-            (idx.bucket_post_start().len() as u64 == m.num_buckets + 1, "bucket table"),
-            (m.num_buckets == A.pow(m.prefix_len), "bucket count"),
+            (
+                (idx.postings.1 - idx.postings.0) as u64 == m.num_postings * post_w as u64,
+                "posting count",
+            ),
+            (*idx.seq_offsets().last().unwrap() == m.total_residues, "sequence offsets"),
+            (
+                *idx.id_offsets().last().unwrap() == (idx.id_bytes.1 - idx.id_bytes.0) as u64,
+                "identifier offsets",
+            ),
         ];
+        if direct {
+            let entries = (koff.1 - koff.0) / koff_w.max(1);
+            let groups = (kgrp.1 - kgrp.0) / kgrp_w;
+            let sized = w <= 6
+                && entries as u64 == A.pow(w) + 1
+                && (koff_w != 2 || groups == entries.div_ceil(OFFSET_GROUP));
+            checks.push((sized, "k-mer offset table"));
+            // the sentinel is read only from a table of the right size
+            checks.push((sized && idx.kmer_offset(entries - 1) == m.num_postings, "k-mer offset table"));
+        } else {
+            checks.extend([
+                (idx.kmer_table().len() as u64 == m.num_kmers, "k-mer count"),
+                (idx.bucket_kmer_start().len() as u64 == m.num_buckets + 1, "bucket table"),
+                (idx.bucket_post_start().len() as u64 == m.num_buckets + 1, "bucket table"),
+                (m.num_buckets == A.pow(m.prefix_len), "bucket count"),
+                (*idx.bucket_kmer_start().last().unwrap() == m.num_kmers, "bucket table"),
+                (*idx.bucket_post_start().last().unwrap() == m.num_postings, "bucket table"),
+            ]);
+        }
         for (ok, what) in checks {
             if !ok {
                 return Err(invalid(format!("{}: inconsistent {} (corrupt index)", p, what)));
             }
-        }
-        let end_checks = [
-            *idx.seq_offsets().last().unwrap() == m.total_residues,
-            *idx.id_offsets().last().unwrap() == (idx.id_bytes.1 - idx.id_bytes.0) as u64,
-            *idx.bucket_kmer_start().last().unwrap() == m.num_kmers,
-            *idx.bucket_post_start().last().unwrap() == m.num_postings,
-        ];
-        if end_checks.iter().any(|&ok| !ok) {
-            return Err(invalid(format!("{}: table end values disagree with header (corrupt index)", p)));
         }
         Ok(idx)
     }
@@ -1561,9 +1929,27 @@ impl SeedIndex {
     fn id_offsets(&self) -> &[u64] {
         self.u64s(self.id_off)
     }
+    /// Entry `c` of the direct offset table.
     #[inline]
-    fn postings_all(&self) -> &[u64] {
-        self.u64s(self.postings)
+    fn kmer_offset(&self, c: usize) -> u64 {
+        let base = self.map.as_ptr();
+        // SAFETY: c < table entries (callers pass valid codes / the sentinel);
+        // the tables were validated in `open` and are aligned to their widths
+        unsafe {
+            match self.koff_w {
+                2 => {
+                    let g = c / OFFSET_GROUP;
+                    let gb = if self.kgrp_w == 4 {
+                        *(base.add(self.kgrp.0 + g * 4) as *const u32) as u64
+                    } else {
+                        *(base.add(self.kgrp.0 + g * 8) as *const u64)
+                    };
+                    gb + *(base.add(self.koff.0 + c * 2) as *const u16) as u64
+                }
+                4 => *(base.add(self.koff.0 + c * 4) as *const u32) as u64,
+                _ => *(base.add(self.koff.0 + c * 8) as *const u64),
+            }
+        }
     }
     #[inline]
     fn kmer_table(&self) -> &[[u32; 2]] {
@@ -1655,41 +2041,124 @@ impl SeedIndex {
         (0..n).step_by(step).map(|i| self.seq_len(i)).collect()
     }
 
-    /// The k-mer presence bitmap (built on first use; `O(distinct k-mers)`).
+    /// The k-mer presence bitmap (built on first use; `O(distinct k-mers)`,
+    /// or one pass over the offset table for the direct layout).
     pub fn presence(&self) -> &Presence {
         self.presence.get_or_init(|| {
             let w = self.meta.pattern.weight() as u32;
             let r = w.min(PRESENCE_MAX_RESIDUES);
             let nbits = A.pow(r);
-            let div = A.pow(w - r);
+            let div = Pow20::new(w - r);
             let mut bits = vec![0u64; nbits.div_ceil(64) as usize];
-            let bks = self.bucket_kmer_start();
-            let tab = self.kmer_table();
-            for b in 0..bks.len().saturating_sub(1) {
-                let base = b as u64 * self.suffix_space;
-                for e in &tab[bks[b] as usize..bks[b + 1] as usize] {
-                    let code = base + e[0] as u64;
-                    let i = code / div;
-                    bits[(i >> 6) as usize] |= 1 << (i & 63);
+            if self.direct {
+                let codes = A.pow(w) as usize;
+                let mut prev = self.kmer_offset(0);
+                for c in 0..codes {
+                    let next = self.kmer_offset(c + 1);
+                    if next > prev {
+                        let i = div.quot(c as u64);
+                        bits[(i >> 6) as usize] |= 1 << (i & 63);
+                    }
+                    prev = next;
+                }
+            } else {
+                let bks = self.bucket_kmer_start();
+                let tab = self.kmer_table();
+                for b in 0..bks.len().saturating_sub(1) {
+                    let base = b as u64 * self.suffix_space.value();
+                    for e in &tab[bks[b] as usize..bks[b + 1] as usize] {
+                        let code = base + e[0] as u64;
+                        let i = div.quot(code);
+                        bits[(i >> 6) as usize] |= 1 << (i & 63);
+                    }
                 }
             }
             Presence { bits, div }
         })
     }
 
-    /// Prefetch the bucket-table entries a [`prefix_ranges`](Self::prefix_ranges)
+    /// Whether lookups use the direct offset table.
+    pub fn is_direct(&self) -> bool {
+        self.direct
+    }
+
+    /// Posting range of `code` in the direct layout (`[a, b)`, empty if the
+    /// k-mer is absent). Requires [`is_direct`](Self::is_direct).
+    #[inline]
+    pub fn direct_range(&self, code: u64) -> (usize, usize) {
+        debug_assert!(self.direct);
+        let c = code as usize;
+        let base = self.map.as_ptr();
+        // SAFETY: `code < 20^w` (callers pass k-mer codes of this index's
+        // weight), so entries c and c + 1 lie in the validated offset table
+        unsafe {
+            match self.koff_w {
+                2 => (self.kmer_offset(c) as usize, self.kmer_offset(c + 1) as usize),
+                4 => {
+                    let p = base.add(self.koff.0 + c * 4) as *const u32;
+                    (*p as usize, *p.add(1) as usize)
+                }
+                _ => {
+                    let p = base.add(self.koff.0 + c * 8) as *const u64;
+                    (*p as usize, *p.add(1) as usize)
+                }
+            }
+        }
+    }
+
+    /// Prefetch the direct-table entries of `code` (no effect on results).
+    #[inline]
+    pub fn prefetch_code(&self, code: u64) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if self.direct {
+                use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+                let c = code as usize;
+                // SAFETY: prefetch has no architectural effect; in bounds
+                unsafe {
+                    _mm_prefetch::<{ _MM_HINT_T0 }>(self.map.as_ptr().add(self.koff.0 + c * self.koff_w) as *const i8);
+                    if self.koff_w == 2 {
+                        _mm_prefetch::<{ _MM_HINT_T0 }>(self.map.as_ptr().add(self.kgrp.0 + c / OFFSET_GROUP * self.kgrp_w) as *const i8);
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = code;
+        }
+    }
+
+    /// Bytes per stored posting.
+    pub fn posting_width(&self) -> usize {
+        self.post_w
+    }
+
+    /// Prefetch the lookup-table entries a [`prefix_ranges`](Self::prefix_ranges)
     /// call for `prefix` will read first (no effect on results).
     #[inline]
     pub fn prefetch_prefix_bucket(&self, prefix: u64) {
         #[cfg(target_arch = "x86_64")]
         {
-            let b = ((prefix * A) / self.suffix_space) as usize;
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            if self.direct {
+                let c = (prefix * A) as usize;
+                let base = self.map.as_ptr();
+                // SAFETY: prefetch has no architectural effect; the 21 entries
+                // of this prefix lie inside the offset table
+                unsafe {
+                    let p = base.add(self.koff.0 + c * self.koff_w);
+                    _mm_prefetch::<{ _MM_HINT_T0 }>(p as *const i8);
+                    _mm_prefetch::<{ _MM_HINT_T0 }>(p.add(20 * self.koff_w) as *const i8);
+                }
+                return;
+            }
+            let b = self.suffix_space.quot(prefix * A) as usize;
             let bks = self.bucket_kmer_start();
             let bps = self.bucket_post_start();
             if b < bks.len() && b < bps.len() {
                 // SAFETY: prefetch has no architectural effect; addresses in bounds
                 unsafe {
-                    use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
                     _mm_prefetch::<{ _MM_HINT_T0 }>(bks.as_ptr().add(b) as *const i8);
                     _mm_prefetch::<{ _MM_HINT_T0 }>(bps.as_ptr().add(b) as *const i8);
                 }
@@ -1702,12 +2171,15 @@ impl SeedIndex {
     }
 
     /// Prefetch the first k-mer-table entries of `prefix`'s bucket (reads the
-    /// bucket start, ideally already prefetched).
+    /// bucket start, ideally already prefetched; no-op for the direct layout).
     #[inline]
     pub fn prefetch_prefix_entries(&self, prefix: u64) {
         #[cfg(target_arch = "x86_64")]
         {
-            let b = ((prefix * A) / self.suffix_space) as usize;
+            if self.direct {
+                return;
+            }
+            let b = self.suffix_space.quot(prefix * A) as usize;
             let bks = self.bucket_kmer_start();
             if b + 1 < bks.len() {
                 let ks = bks[b] as usize;
@@ -1730,15 +2202,28 @@ impl SeedIndex {
     /// Posting ranges of the 20 k-mers `prefix·20 + r` (`prefix` = the first
     /// `w − 1` residues of a code, i.e. `code / 20`): for every present k-mer
     /// sets bit `r` of the returned mask and `ranges[r] = [start, end)` in the
-    /// global posting array. One bucket probe and one binary search serve all
-    /// 20 codes — the seed generator emits k-mers grouped by this prefix.
+    /// global posting array. One lookup serves all 20 codes — the seed
+    /// generator emits k-mers grouped by this prefix.
     #[inline]
     pub fn prefix_ranges(&self, prefix: u64, ranges: &mut [(usize, usize); 20]) -> u32 {
         let code0 = prefix * A;
+        let mut mask = 0u32;
+        if self.direct {
+            let c = code0 as usize;
+            let mut prev = self.kmer_offset(c);
+            for (r, slot) in ranges.iter_mut().enumerate() {
+                let next = self.kmer_offset(c + r + 1);
+                if next > prev {
+                    *slot = (prev as usize, next as usize);
+                    mask |= 1 << r;
+                }
+                prev = next;
+            }
+            return mask;
+        }
         let bks = self.bucket_kmer_start();
         let bps = self.bucket_post_start();
-        let mut mask = 0u32;
-        if self.suffix_space == 1 {
+        if self.suffix_space.value() == 1 {
             // every k-mer is its own bucket (w ≤ 4)
             for (r, slot) in ranges.iter_mut().enumerate() {
                 let b = (code0 + r as u64) as usize;
@@ -1751,8 +2236,8 @@ impl SeedIndex {
         }
         // suffix_space is a power of 20 ≥ 20: the 20 codes share a bucket and
         // occupy suffixes [s0, s0 + 20)
-        let b = (code0 / self.suffix_space) as usize;
-        let s0 = (code0 % self.suffix_space) as u32;
+        let b = self.suffix_space.quot(code0) as usize;
+        let s0 = self.suffix_space.modulo(code0) as u32;
         let (ks, ke) = (bks[b] as usize, bks[b + 1] as usize);
         if ks == ke {
             return 0;
@@ -1775,8 +2260,13 @@ impl SeedIndex {
     /// Global posting-array range `[a, b)` of a k-mer code (empty if absent).
     #[inline]
     pub fn posting_range(&self, code: u64) -> (usize, usize) {
-        let b = (code / self.suffix_space) as usize;
-        let suf = (code % self.suffix_space) as u32;
+        if self.direct {
+            let c = code as usize;
+            let (a, b) = (self.kmer_offset(c), self.kmer_offset(c + 1));
+            return if b > a { (a as usize, b as usize) } else { (0, 0) };
+        }
+        let b = self.suffix_space.quot(code) as usize;
+        let suf = self.suffix_space.modulo(code) as u32;
         let bks = self.bucket_kmer_start();
         let (ks, ke) = (bks[b] as usize, bks[b + 1] as usize);
         if ks == ke {
@@ -1799,38 +2289,95 @@ impl SeedIndex {
         }
     }
 
-    /// Postings `[a, b)` of the global posting array.
+    /// Posting `k` of the global posting array as `(target, position)`.
     #[inline]
-    pub fn postings_in(&self, a: usize, b: usize) -> &[u64] {
-        &self.postings_all()[a..b]
+    pub fn posting(&self, k: usize) -> (u64, u64) {
+        debug_assert!((k as u64) < self.meta.num_postings);
+        // SAFETY: k < num_postings (callers use ranges from the lookup tables),
+        // so the 8-byte read starts inside the posting section; writers leave
+        // 8 bytes of slack after it (checked in `open`)
+        let v = unsafe {
+            (self.map.as_ptr().add(self.postings.0 + k * self.post_w) as *const u64).read_unaligned()
+        } & self.post_mask;
+        (v >> self.pos_bits, v & self.pos_mask)
     }
 
-    /// Posting list of a k-mer code: `(target << 32) | position` values sorted by
-    /// (target, position).
+    /// Postings `[a, b)` decoded as `(target << 32) | position` values.
+    pub fn postings_in(&self, a: usize, b: usize) -> Vec<u64> {
+        (a..b)
+            .map(|k| {
+                let (t, p) = self.posting(k);
+                (t << 32) | p
+            })
+            .collect()
+    }
+
+    /// Posting list of a k-mer code as `(target << 32) | position` values,
+    /// sorted by (target, position).
+    pub fn postings(&self, code: u64) -> Vec<u64> {
+        let (a, b) = self.posting_range(code);
+        self.postings_in(a, b)
+    }
+
+    /// `(offset, length)` of target `i` in [`all_residues`](Self::all_residues).
     #[inline]
-    pub fn postings(&self, code: u64) -> &[u64] {
-        let b = (code / self.suffix_space) as usize;
-        let suf = (code % self.suffix_space) as u32;
-        let bks = self.bucket_kmer_start();
-        let (ks, ke) = (bks[b] as usize, bks[b + 1] as usize);
-        if ks == ke {
-            return &[];
-        }
-        let tab = &self.kmer_table()[ks..ke];
-        match tab.binary_search_by_key(&suf, |e| e[0]) {
-            Ok(e) => {
-                let bps = self.bucket_post_start();
-                let base = bps[b] as usize;
-                let s = base + tab[e][1] as usize;
-                let end = if e + 1 < tab.len() {
-                    base + tab[e + 1][1] as usize
-                } else {
-                    bps[b + 1] as usize
-                };
-                &self.postings_all()[s..end]
+    pub fn seq_span(&self, i: usize) -> (usize, usize) {
+        let o = self.seq_offsets();
+        (o[i] as usize, (o[i + 1] - o[i]) as usize)
+    }
+
+    /// The concatenated residues of every target.
+    #[inline]
+    pub fn all_residues(&self) -> &[u8] {
+        self.residues()
+    }
+
+    /// Hint the CPU to fetch `all_residues()[a..b]` (no effect on results).
+    #[inline]
+    pub fn prefetch_residue_range(&self, a: usize, b: usize) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let res = self.residues();
+            let b = b.min(res.len());
+            let mut p = a & !63;
+            while p < b {
+                // SAFETY: prefetch has no architectural effect; p < res.len()
+                unsafe {
+                    std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(res.as_ptr().add(p) as *const i8);
+                }
+                p += 64;
             }
-            Err(_) => &[],
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = (a, b);
+        }
+    }
+
+    /// Hint the CPU to fetch posting `k` (no effect on results).
+    #[inline]
+    pub fn prefetch_posting(&self, k: usize) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if (k as u64) < self.meta.num_postings {
+                // SAFETY: prefetch has no architectural effect; k is in bounds
+                unsafe {
+                    std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(
+                        self.map.as_ptr().add(self.postings.0 + k * self.post_w) as *const i8,
+                    );
+                }
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = k;
+        }
+    }
+
+    /// Length of the longest target.
+    #[inline]
+    pub fn max_seq_len(&self) -> usize {
+        self.meta.max_seq_len as usize
     }
 }
 
@@ -1929,6 +2476,118 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn layouts_and_posting_widths_agree() {
+        // every lookup path (sparse / direct) and posting encoding (minimal
+        // width, forced wider widths, the v1-style 8 bytes) returns the same
+        // postings, prefix ranges and presence answers
+        let db = random_db(5, 300);
+        for mask_s in ["111111", "11011", "1111", "11"] {
+            let pat = SeedPattern::from_mask(mask_s).unwrap();
+            let want = naive(&db, &pat, None);
+            let w = pat.weight() as u32;
+            for (layout, grouped) in [
+                (LayoutChoice::Sparse, true),
+                (LayoutChoice::Direct, true),
+                (LayoutChoice::Direct, false),
+                (LayoutChoice::Auto, true),
+            ] {
+                for width in [None, Some(4), Some(8)] {
+                    let mut o = BuildOptions::new(pat.clone());
+                    o.layout = layout;
+                    o.direct_grouped = grouped;
+                    o.posting_width = width;
+                    let (idx, st) = SeedIndex::build_transient(&db, &o).unwrap();
+                    let tag = format!("{} {:?} grouped {} {:?}", mask_s, layout, grouped, width);
+                    match layout {
+                        LayoutChoice::Sparse => assert!(!idx.is_direct(), "{}", tag),
+                        LayoutChoice::Direct => {
+                            assert!(idx.is_direct(), "{}", tag);
+                            assert_eq!(idx.meta().offset_width, if grouped { 2 } else { 4 }, "{}", tag);
+                        }
+                        LayoutChoice::Auto => {}
+                    }
+                    if let Some(wd) = width {
+                        assert_eq!(idx.posting_width(), wd as usize, "{}", tag);
+                    }
+                    assert_eq!(st.posting_width as usize, idx.posting_width());
+                    idx.verify().unwrap();
+                    assert_eq!(idx.distinct_kmers(), want.len(), "{}", tag);
+                    for (code, list) in &want {
+                        assert_eq!(idx.postings(*code), &list[..], "{} code {}", tag, code);
+                    }
+                    let mut rng = crate::evalue::SplitMix64::new(77);
+                    let space = 20u64.pow(w);
+                    let mut ranges = [(0usize, 0usize); 20];
+                    let presence = idx.presence();
+                    for _ in 0..3000 {
+                        let c = rng.next_u64() % space;
+                        let present = want.contains_key(&c);
+                        assert_eq!(idx.postings(c).len(), want.get(&c).map(|v| v.len()).unwrap_or(0), "{}", tag);
+                        assert_eq!(presence.may_contain(c), present, "{} presence {}", tag, c);
+                        let mask = idx.prefix_ranges(c / 20, &mut ranges);
+                        assert_eq!((mask >> (c % 20)) & 1 == 1, present, "{} prefix {}", tag, c);
+                        if present {
+                            assert_eq!(ranges[(c % 20) as usize], idx.posting_range(c), "{}", tag);
+                        }
+                    }
+                    for i in (0..db.len()).step_by(29) {
+                        assert_eq!(idx.seq(i), db.num(i));
+                        assert_eq!(idx.id(i), db.id(i));
+                    }
+                }
+            }
+        }
+        // a group whose postings overflow 16 bits falls back to full offsets
+        let t = crate::alphabet::build_aa2num();
+        let big = SeqDb::from_reader(io::Cursor::new(format!(">poly\n{}\n>mix\nMKVLLACDEFGHIKLMNPQRSTVWY\n", "A".repeat(70_000))), &t).unwrap();
+        let mut o = BuildOptions::new(SeedPattern::contiguous(2));
+        o.mask = None;
+        o.layout = LayoutChoice::Direct;
+        let (idx, _) = SeedIndex::build_transient(&big, &o).unwrap();
+        assert_eq!(idx.meta().offset_width, 4, "overflowing group must not be grouped");
+        idx.verify().unwrap();
+        let want = naive(&big, &SeedPattern::contiguous(2), None);
+        for (code, list) in &want {
+            assert_eq!(idx.postings(*code), &list[..], "code {}", code);
+        }
+        // impossible requests fail loudly
+        let mut o = BuildOptions::new(SeedPattern::from_mask("1111111").unwrap());
+        o.layout = LayoutChoice::Direct;
+        assert!(SeedIndex::build_transient(&db, &o).is_err(), "direct layout for weight 7");
+        let mut o = BuildOptions::new(SeedPattern::contiguous(6));
+        o.posting_width = Some(1);
+        assert!(SeedIndex::build_transient(&db, &o).is_err(), "1-byte postings cannot hold 300 targets");
+    }
+
+    #[test]
+    fn format_v1_indexes_remain_readable() {
+        // tests/data/v1_fixture_k2.stidx was written by sabertooth 0.3.0
+        // (format 1: sparse tables, 8-byte postings) from v1_fixture.fa
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+        let v1 = SeedIndex::open(&dir.join("v1_fixture_k2.stidx")).unwrap();
+        assert_eq!(v1.meta().version, 1);
+        assert_eq!(v1.posting_width(), 8);
+        assert!(!v1.is_direct());
+        v1.verify().unwrap();
+        let text = std::fs::read_to_string(dir.join("v1_fixture.fa")).unwrap();
+        let db = db_from(&text);
+        let pat = SeedPattern::contiguous(2);
+        let (v2, _) = SeedIndex::build_transient(&db, &BuildOptions::new(pat.clone())).unwrap();
+        assert_eq!(v2.meta().version, FORMAT_VERSION);
+        assert_eq!(v1.len(), v2.len());
+        assert_eq!(v1.meta().num_postings, v2.meta().num_postings);
+        let want = naive(&db, &pat, None);
+        for c in 0..400u64 {
+            assert_eq!(v1.postings(c), v2.postings(c), "code {}", c);
+            assert_eq!(v1.postings(c).len(), want.get(&c).map(|v| v.len()).unwrap_or(0));
+        }
+        for i in 0..db.len() {
+            assert_eq!(v1.seq(i), v2.seq(i));
+            assert_eq!(v1.id(i), v2.id(i));
         }
     }
 

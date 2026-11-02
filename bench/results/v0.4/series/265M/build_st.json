@@ -1,0 +1,81 @@
+{
+ "tool": "st",
+ "fasta": "/home/claude/bench_data/series/series_265M.fa",
+ "target": "/home/claude/series_out/265M/dbs/st_db",
+ "steps": {
+  "makedb": {
+   "label": "st makedb",
+   "cmd": [
+    "/home/claude/bin/sabertooth-0.4.0",
+    "makedb",
+    "/home/claude/bench_data/series/series_265M.fa",
+    "/home/claude/series_out/265M/dbs/st_db"
+   ],
+   "repeat": 1,
+   "warmup_wall_s": [],
+   "wall_s": {
+    "min": 2.9347318340005586,
+    "median": 2.9347318340005586,
+    "max": 2.9347318340005586,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 11513856,
+    "median": 11513856,
+    "max": 11513856
+   },
+   "runs": [
+    {
+     "wall_s": 2.9347318340005586,
+     "exit": 0,
+     "peak_rss_bytes": 11513856,
+     "user_s": 1.91512,
+     "sys_s": 0.5016809999999999,
+     "minor_faults": 1433,
+     "major_faults": 0,
+     "stderr_tail": "makedb: wrote 1454323 sequences to /home/claude/series_out/265M/dbs/st_db{,.index,.dbtype,_h,_h.index,.lookup,.source} (amino acid)\n  (sequence database only; build the seed index with `sabertooth createindex /home/claude/series_out/265M/dbs/st_db`)\n",
+     "rep": 0
+    }
+   ]
+  },
+  "createindex": {
+   "label": "st createindex",
+   "cmd": [
+    "/home/claude/bin/sabertooth-0.4.0",
+    "createindex",
+    "/home/claude/series_out/265M/dbs/st_db",
+    "--threads",
+    "2"
+   ],
+   "repeat": 1,
+   "warmup_wall_s": [],
+   "wall_s": {
+    "min": 96.73281348700039,
+    "median": 96.73281348700039,
+    "max": 96.73281348700039,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 1598070784,
+    "median": 1598070784,
+    "max": 1598070784
+   },
+   "runs": [
+    {
+     "wall_s": 96.73281348700039,
+     "exit": 0,
+     "peak_rss_bytes": 1598070784,
+     "user_s": 163.782488,
+     "sys_s": 5.976032,
+     "minor_faults": 1093666,
+     "major_faults": 0,
+     "stderr_tail": "createindex: 1454323 sequences, 265123580 residues -> /home/claude/series_out/265M/dbs/st_db.stidx (245213679 postings of 4 bytes, 47364450 distinct 6-mers, direct lookup, 5814696 masked residues, 4 partition(s), 1350.1 MiB) in 96.71s; peak RSS 1524.0 MiB\n",
+     "rep": 0
+    }
+   ]
+  }
+ },
+ "bytes": 1787304739,
+ "wall_s": 99.66754532100094,
+ "peak_rss_bytes": 1598070784
+}

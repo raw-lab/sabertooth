@@ -1,0 +1,221 @@
+{
+ "run": "st_exhaustive_plain",
+ "tool": "sabertooth_exh",
+ "version": "Sabertooth v0.4.0 (easysearch: exhaustive Smith-Waterman, no prefilter)",
+ "workload": "null_db",
+ "database": "null",
+ "args": [
+  "--mask",
+  "0",
+  "--comp-bias-corr",
+  "0",
+  "--mask-scoring",
+  "0"
+ ],
+ "options": {},
+ "command": [
+  "/home/claude/bin/sabertooth-0.4.0",
+  "easysearch",
+  "/home/claude/bench_data/ds_scale/q_eval.fa",
+  "/home/claude/bench_data/ds_scale/db_null.fa",
+  "--evalue",
+  "10",
+  "--max-hits",
+  "4000",
+  "--threads",
+  "2",
+  "--out",
+  "/home/claude/suites/v0.4/null/st_exhaustive_plain__null_db.m8",
+  "--stats-json",
+  "/home/claude/suites/v0.4/null/st_exhaustive_plain__null_db.stats.json",
+  "--mask",
+  "0",
+  "--comp-bias-corr",
+  "0",
+  "--mask-scoring",
+  "0"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "st_exhaustive_plain__null_db",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.4.0",
+   "easysearch",
+   "/home/claude/bench_data/ds_scale/q_eval.fa",
+   "/home/claude/bench_data/ds_scale/db_null.fa",
+   "--evalue",
+   "10",
+   "--max-hits",
+   "4000",
+   "--threads",
+   "2",
+   "--out",
+   "/home/claude/suites/v0.4/null/st_exhaustive_plain__null_db.m8",
+   "--stats-json",
+   "/home/claude/suites/v0.4/null/st_exhaustive_plain__null_db.stats.json",
+   "--mask",
+   "0",
+   "--comp-bias-corr",
+   "0",
+   "--mask-scoring",
+   "0"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 126.545014274001,
+   "median": 126.545014274001,
+   "max": 126.545014274001,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 20344832,
+   "median": 20344832,
+   "max": 20344832
+  },
+  "runs": [
+   {
+    "wall_s": 126.545014274001,
+    "exit": 0,
+    "peak_rss_bytes": 20344832,
+    "user_s": 246.188881,
+    "sys_s": 0.08441799999999999,
+    "minor_faults": 4707,
+    "major_faults": 0,
+    "stderr_tail": "easysearch (database-free, no prefilter index): 4000 queries x 14323 targets = 57292000 full SW alignments, 55064 hits in 126.54s\n",
+    "rep": 0
+   }
+  ]
+ },
+ "db_build": null,
+ "sabertooth_stats": {
+  "command": "easysearch",
+  "version": "0.4.0",
+  "plan": {
+   "budget_bytes": null,
+   "threads": 2,
+   "hit_block": 1048576,
+   "full_traceback_cells": 4194304,
+   "per_worker_scratch_estimate_bytes": 24117248,
+   "query_batch_seqs": 1024,
+   "query_batch_residues": 67108864,
+   "index_build_budget_bytes": 1073741824
+  },
+  "statistics_model": "calibrated gapped (BLOSUM62 11/1, comp-bias off) (lambda 0.3666, K 0.1177)",
+  "wall_s": {
+   "load": 0.017172,
+   "search": 126.522492,
+   "output": 0.0,
+   "total": 126.540035
+  },
+  "queries_per_s": 31.614932,
+  "per_query": {
+   "postings_visited": 0.0,
+   "candidates": 14323.0,
+   "gapped_alignments": 14323.0,
+   "tracebacks": 13.766,
+   "hits": 13.766
+  },
+  "counters": {
+   "queries": 4000,
+   "query_residues": 747684,
+   "windows": 0,
+   "windows_skipped_mask_or_x": 0,
+   "kmers_generated": 0,
+   "windows_at_kmer_cap": 0,
+   "exact_seeds_added": 0,
+   "index_lookups": 0,
+   "index_prefix_probes": 0,
+   "presence_bitmap_rejects": 0,
+   "seeds_with_postings": 0,
+   "postings_visited": 0,
+   "seeds_over_occ_cap": 0,
+   "postings_skipped_occ_cap": 0,
+   "target_blocks": 0,
+   "hit_buffer_peak_entries": 0,
+   "hit_buffer_peak_bytes": 0,
+   "hit_buffer_overruns": 0,
+   "targets_hit": 0,
+   "targets_evaluated": 0,
+   "diagonals_scored": 0,
+   "xdrop_extensions": 0,
+   "chains_used": 0,
+   "candidates": 57292000,
+   "candidates_capped": 0,
+   "gapped_scored": 57292000,
+   "gapped_cells": 1952267972508,
+   "scalar_fallbacks": 0,
+   "windowed": 0,
+   "window_expansions": 0,
+   "passed_score": 55064,
+   "tracebacks": 55064,
+   "rejected_coverage": 0,
+   "hits": 55064,
+   "score_mismatches": 0,
+   "profile_calibrations": 0,
+   "masked_scoring_positions": 0,
+   "cpu_s_setup": 0.190791,
+   "cpu_s_prefilter": 0.290202,
+   "cpu_s_seed_generation": 0.0,
+   "cpu_s_hit_collection_sort": 0.0,
+   "cpu_s_diagonal_evidence": 0.0,
+   "cpu_s_gapped_scoring": 246.374441,
+   "cpu_s_traceback": 2.518817
+  },
+  "memory": {
+   "peak_rss_bytes": 20344832,
+   "seed_hit_buffer_peak_bytes": 0,
+   "minor_page_faults": 4703,
+   "major_page_faults": 0,
+   "user_cpu_s": 246.18,
+   "system_cpu_s": 0.08
+  }
+ },
+ "null": {
+  "queries": 4000,
+  "thresholds": [
+   {
+    "evalue": 0.0001,
+    "hits": 3,
+    "per_query": 0.00075,
+    "expected_per_query": 0.0001,
+    "observed_over_expected": 7.5
+   },
+   {
+    "evalue": 0.001,
+    "hits": 12,
+    "per_query": 0.003,
+    "expected_per_query": 0.001,
+    "observed_over_expected": 3.0
+   },
+   {
+    "evalue": 0.01,
+    "hits": 53,
+    "per_query": 0.01325,
+    "expected_per_query": 0.01,
+    "observed_over_expected": 1.325
+   },
+   {
+    "evalue": 0.1,
+    "hits": 589,
+    "per_query": 0.14725,
+    "expected_per_query": 0.1,
+    "observed_over_expected": 1.4725
+   },
+   {
+    "evalue": 1.0,
+    "hits": 5772,
+    "per_query": 1.443,
+    "expected_per_query": 1.0,
+    "observed_over_expected": 1.443
+   },
+   {
+    "evalue": 10.0,
+    "hits": 55064,
+    "per_query": 13.766,
+    "expected_per_query": 10.0,
+    "observed_over_expected": 1.3766
+   }
+  ]
+ }
+}

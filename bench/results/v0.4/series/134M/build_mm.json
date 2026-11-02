@@ -1,0 +1,86 @@
+{
+ "tool": "mm",
+ "fasta": "/home/claude/bench_data/series/series_134M.fa",
+ "target": "/home/claude/series_out/134M/dbs/mm_db",
+ "steps": {
+  "createdb": {
+   "label": "mm createdb",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createdb",
+    "/home/claude/bench_data/series/series_134M.fa",
+    "/home/claude/series_out/134M/dbs/mm_db",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "warmup_wall_s": [],
+   "wall_s": {
+    "min": 1.9608232050013612,
+    "median": 1.9608232050013612,
+    "max": 1.9608232050013612,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 153894912,
+    "median": 153894912,
+    "max": 153894912
+   },
+   "runs": [
+    {
+     "wall_s": 1.9608232050013612,
+     "exit": 0,
+     "peak_rss_bytes": 153894912,
+     "user_s": 1.460916,
+     "sys_s": 0.448164,
+     "minor_faults": 58129,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "createindex": {
+   "label": "mm createindex",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createindex",
+    "/home/claude/series_out/134M/dbs/mm_db",
+    "/home/claude/series_out/134M/dbs/mm_tmp",
+    "--threads",
+    "2",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "warmup_wall_s": [],
+   "wall_s": {
+    "min": 49.516915451000386,
+    "median": 49.516915451000386,
+    "max": 49.516915451000386,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 1870090240,
+    "median": 1870090240,
+    "max": 1870090240
+   },
+   "runs": [
+    {
+     "wall_s": 49.516915451000386,
+     "exit": 0,
+     "peak_rss_bytes": 1870090240,
+     "user_s": 89.254533,
+     "sys_s": 3.150769,
+     "minor_faults": 555231,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  }
+ },
+ "bytes": 2166493424,
+ "wall_s": 51.47773865600175,
+ "peak_rss_bytes": 1870090240
+}

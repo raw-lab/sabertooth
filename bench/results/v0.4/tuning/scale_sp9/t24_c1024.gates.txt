@@ -1,0 +1,17 @@
+gate  30  cand/q   2421.5  Mcells/q  160.03  AUC1 0.1828  TP/FP@1e-3  3835/2    TP@10  5063  FP@rec 0.05:1 0.06:1 0.07:49 0.08:2297
+gate  31  cand/q   1857.8  Mcells/q  123.30  AUC1 0.1820  TP/FP@1e-3  3817/2    TP@10  5024  FP@rec 0.05:1 0.06:1 0.07:59 0.08:2957
+gate  32  cand/q   1408.8  Mcells/q   93.90  AUC1 0.1809  TP/FP@1e-3  3810/2    TP@10  5000  FP@rec 0.05:1 0.06:1 0.07:60 0.08:3412
+gate  33  cand/q   1057.1  Mcells/q   70.71  AUC1 0.1805  TP/FP@1e-3  3792/2    TP@10  4966  FP@rec 0.05:1 0.06:1 0.07:66 0.08:4098
+gate  34  cand/q    786.5  Mcells/q   52.84  AUC1 0.1794  TP/FP@1e-3  3775/2    TP@10  4927  FP@rec 0.05:1 0.06:1 0.07:71 0.08:None
+gate  35  cand/q    580.0  Mcells/q   39.13  AUC1 0.1783  TP/FP@1e-3  3759/2    TP@10  4883  FP@rec 0.05:1 0.06:1 0.07:89 0.08:None
+gate  36  cand/q    424.5  Mcells/q   28.77  AUC1 0.1776  TP/FP@1e-3  3737/2    TP@10  4834  FP@rec 0.05:1 0.06:2 0.07:122 0.08:None
+gate  37  cand/q    309.3  Mcells/q   21.06  AUC1 0.1766  TP/FP@1e-3  3713/2    TP@10  4781  FP@rec 0.05:1 0.06:2 0.07:155 0.08:None
+gate  38  cand/q    224.9  Mcells/q   15.38  AUC1 0.1754  TP/FP@1e-3  3689/2    TP@10  4731  FP@rec 0.05:1 0.06:2 0.07:203 0.08:None
+gate  39  cand/q    163.3  Mcells/q   11.21  AUC1 0.1747  TP/FP@1e-3  3671/2    TP@10  4688  FP@rec 0.05:1 0.06:2 0.07:248 0.08:None
+gate  40  cand/q    118.3  Mcells/q    8.15  AUC1 0.1734  TP/FP@1e-3  3651/2    TP@10  4640  FP@rec 0.05:1 0.06:2 0.07:312 0.08:None
+gate  41  cand/q     86.1  Mcells/q    5.95  AUC1 0.1727  TP/FP@1e-3  3628/2    TP@10  4593  FP@rec 0.05:1 0.06:2 0.07:405 0.08:None
+gate  42  cand/q     63.0  Mcells/q    4.37  AUC1 0.1721  TP/FP@1e-3  3615/2    TP@10  4547  FP@rec 0.05:1 0.06:2 0.07:529 0.08:None
+gate  43  cand/q     46.4  Mcells/q    3.22  AUC1 0.1711  TP/FP@1e-3  3597/2    TP@10  4495  FP@rec 0.05:1 0.06:2 0.07:704 0.08:None
+gate  44  cand/q     34.4  Mcells/q    2.40  AUC1 0.1697  TP/FP@1e-3  3574/2    TP@10  4438  FP@rec 0.05:1 0.06:3 0.07:1146 0.08:None
+gate  45  cand/q     26.1  Mcells/q    1.81  AUC1 0.1687  TP/FP@1e-3  3544/2    TP@10  4383  FP@rec 0.05:1 0.06:10 0.07:1985 0.08:None
+gate  46  cand/q     20.0  Mcells/q    1.39  AUC1 0.1673  TP/FP@1e-3  3524/2    TP@10  4336  FP@rec 0.05:1 0.06:11 0.07:None 0.08:None

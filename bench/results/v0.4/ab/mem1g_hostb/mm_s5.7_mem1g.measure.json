@@ -1,0 +1,88 @@
+{
+ "label": "mm_s5.7_mem1g",
+ "cmd": [
+  "timeout",
+  "1500",
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/series/q_eval1k.fa",
+  "/home/claude/ab_work/mm68",
+  "/home/claude/ab_out/mem1g_hostb/mm_s5.7_mem1g.m8",
+  "/home/claude/ab_work/mmtmp_a",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7"
+ ],
+ "repeat": 3,
+ "warmup_wall_s": [
+  6.781489694999436
+ ],
+ "wall_s": {
+  "min": 162.8320311260004,
+  "median": 163.9308484480007,
+  "max": 167.55704073299967,
+  "stdev": 2.472595996826997
+ },
+ "peak_rss_bytes": {
+  "min": 1071112192,
+  "median": 1071300608,
+  "max": 1071308800
+ },
+ "runs": [
+  {
+   "wall_s": 167.55704073299967,
+   "exit": 0,
+   "peak_rss_bytes": 1071300608,
+   "user_s": 24.863138,
+   "sys_s": 179.976609,
+   "minor_faults": 1390788,
+   "major_faults": 2805518,
+   "stderr_tail": "",
+   "rep": 0,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 1073741824,
+    "failcnt": 12025982
+   }
+  },
+  {
+   "wall_s": 163.9308484480007,
+   "exit": 0,
+   "peak_rss_bytes": 1071308800,
+   "user_s": 24.557664,
+   "sys_s": 176.378998,
+   "minor_faults": 1377931,
+   "major_faults": 2767863,
+   "stderr_tail": "",
+   "rep": 1,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 1073741824,
+    "failcnt": 11841945
+   }
+  },
+  {
+   "wall_s": 162.8320311260004,
+   "exit": 0,
+   "peak_rss_bytes": 1071112192,
+   "user_s": 25.294678,
+   "sys_s": 175.336232,
+   "minor_faults": 1358461,
+   "major_faults": 2718505,
+   "stderr_tail": "",
+   "rep": 2,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 1073741824,
+    "failcnt": 11817603
+   }
+  }
+ ]
+}

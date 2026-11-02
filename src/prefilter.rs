@@ -53,8 +53,9 @@ use crate::index::SeedIndex;
 use crate::mask::MaskParams;
 use crate::matrix::SubstitutionMatrix;
 use crate::profile::Profile;
+use crate::ungapped::{DiagKernel, DiagProfile, Lane};
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 use std::time::Instant;
 
 /// Number of real residues used for k-mer coding.
@@ -150,7 +151,25 @@ impl SeedPattern {
         }
         String::from_utf8(m).unwrap()
     }
+
+    /// The default seed of sequence searches and `createindex`
+    /// ([`DEFAULT_SEQUENCE_SEED`]).
+    pub fn sequence_default() -> Self {
+        Self::from_mask(DEFAULT_SEQUENCE_SEED).expect("valid default seed")
+    }
+
+    /// The default seed of profile searches (contiguous 5-mer).
+    pub fn profile_default() -> Self {
+        Self::contiguous(5)
+    }
 }
+
+/// Default seed pattern of sequence searches and `createindex`: weight 6 over
+/// a span of 9. At equal modeled cost it ranks more true homologs above the
+/// first false positive than the contiguous 6-mer of v0.3 on both the SCOPe
+/// tuning split and the 68 M-residue scale database (`bench/README.md`);
+/// `--k 6` selects the contiguous seed.
+pub const DEFAULT_SEQUENCE_SEED: &str = "111001101";
 
 /// Map a sensitivity value (higher = more sensitive) to a similar-k-mer score
 /// threshold, mirroring MMseqs2's `-s` in spirit (monotone; `s ≈ 5.7`
@@ -165,20 +184,25 @@ pub fn kmer_score_for_sensitivity(s: f64, scale: i32) -> i32 {
 }
 
 /// Sequence-search sensitivity presets: `-s` → `(kmer_score, max_kmers,
-/// min_diag_score)`. Anchors are measured operating points on the SCOPe
-/// tuning split (see `bench/README.md`); values between anchors are
-/// interpolated (k-mer score linearly, cap geometrically, gate linearly).
-/// Lower k-mer thresholds generate more seeds (sensitivity); the higher
-/// ungapped gate keeps the extra random candidates out of gapped alignment.
-pub const SEQUENCE_PRESETS: [(f64, i32, usize, i32); 8] = [
-    (1.0, 26, 192, 30),
-    (2.0, 25, 256, 30),
-    (4.0, 24, 320, 30),
-    (5.7, 22, 512, 33),
-    (6.5, 21, 640, 33),
-    (7.5, 19, 1024, 34),
-    (8.5, 17, 1536, 36),
-    (9.0, 16, 2048, 38),
+/// min_diag_score)`, the gate given for a [`GATE_REF_RESIDUES`]-residue
+/// database (the CLI moves it with the database size, see
+/// [`size_adjusted_gate`]). Anchors are points of the measured
+/// speed–sensitivity frontier of the default spaced seed on the SCOPe tuning
+/// queries against the 68 M-residue scale database (`bench/README.md`);
+/// values between anchors are interpolated (k-mer score linearly, cap
+/// geometrically, gate linearly). Lower k-mer thresholds and larger caps
+/// generate more seeds (sensitivity, cost).
+pub const SEQUENCE_PRESETS: [(f64, i32, usize, i32); 10] = [
+    (1.0, 32, 64, 42),
+    (2.0, 30, 128, 42),
+    (3.0, 28, 128, 42),
+    (4.0, 26, 256, 42),
+    (5.0, 24, 256, 42),
+    (5.7, 22, 512, 42),
+    (6.5, 20, 512, 42),
+    (7.5, 18, 1024, 42),
+    (8.5, 18, 2048, 42),
+    (9.0, 16, 4096, 42),
 ];
 
 /// Interpolated sequence preset for sensitivity `s` (clamped to 1..9).
@@ -197,6 +221,39 @@ pub fn sequence_preset(s: f64) -> (i32, usize, i32) {
     let cap = ((cap / 32.0).round() as usize).max(1) * 32;
     let gate = (g0 as f64 + f * (g1 - g0) as f64).round() as i32;
     (kmer, cap, gate)
+}
+
+/// Database size (residues) at which the [`SEQUENCE_PRESETS`] gates apply.
+pub const GATE_REF_RESIDUES: f64 = 1.0e8;
+/// Change of the ungapped gate (raw score units) per e-fold of database size
+/// below [`GATE_REF_RESIDUES`] …
+pub const GATE_SLOPE_BELOW: f64 = 2.5;
+/// … and above it.
+pub const GATE_SLOPE_ABOVE: f64 = 1.0;
+/// Bounds of the size-adjusted gate.
+pub const GATE_MIN: i32 = 20;
+pub const GATE_MAX: i32 = 60;
+
+/// The ungapped gate for a database of `db_residues` residues, given the gate
+/// `gate` of a [`GATE_REF_RESIDUES`]-residue database: `gate + slope ·
+/// ln(db_residues / GATE_REF_RESIDUES)` with [`GATE_SLOPE_BELOW`] for smaller
+/// and [`GATE_SLOPE_ABOVE`] for larger databases, rounded and clamped to
+/// `GATE_MIN..=GATE_MAX`.
+///
+/// Chance seed matches — and with them the diagonals to score and the
+/// candidates sent to gapped alignment — grow linearly with the database,
+/// while the per-query work that does not depend on it (similar k-mer
+/// generation) stays fixed. On small databases gapped alignment is a small
+/// part of the run, so a lower gate buys sensitivity cheaply; from about
+/// 10^8 residues the database-proportional work dominates and the best gate
+/// rises only slowly (the E-value a weak alignment would need also grows
+/// with the database). Fitted on the SCOPe tuning split at 2.6, 17, 68 and
+/// 265 M residues (`bench/README.md`). The CLI applies it to the preset gate
+/// unless `--min-diag-score` is given; library users call it themselves.
+pub fn size_adjusted_gate(gate: i32, db_residues: usize) -> i32 {
+    let x = (db_residues.max(1) as f64 / GATE_REF_RESIDUES).ln();
+    let slope = if x < 0.0 { GATE_SLOPE_BELOW } else { GATE_SLOPE_ABOVE };
+    ((gate as f64 + slope * x).round() as i32).clamp(GATE_MIN, GATE_MAX)
 }
 
 /// Prefilter configuration. One definition serves the CLI, the library and
@@ -235,18 +292,27 @@ pub struct PrefilterParams {
     /// (drop-off `x`, raw units) from each seed hit, so the cost is the
     /// segment length rather than the diagonal length.
     pub xdrop: i32,
+    /// Compute each candidate's target region (`t_lo..=t_hi`, needed only by
+    /// seed-guided windows). Off: diagonal-segment evidence reports
+    /// `0..=u32::MAX` (the whole target) and skips the boundary computation.
+    pub regions: bool,
+    /// Segment evidence (`xdrop = 0`) is the best ungapped segment within
+    /// this many residues of the outermost seed hits on each diagonal
+    /// (0 = anywhere on the diagonal).
+    pub diag_window: usize,
 }
 
 impl PrefilterParams {
     /// Sequence-search defaults (the CLI defaults).
     pub fn sequence_default() -> Self {
-        // the `-s 5.7` preset
+        // the `-s 5.7` preset; the gate is that of a 10^8-residue database
+        // (the CLI adjusts it with `size_adjusted_gate`)
         PrefilterParams {
             k: 6,
             kmer_score: 22,
             max_kmers_per_pos: 512,
             min_hits: 1,
-            min_diag_score: 33,
+            min_diag_score: 42,
             diag_hits: 1,
             max_diagonals: 4,
             max_candidates: 0,
@@ -254,9 +320,12 @@ impl PrefilterParams {
             exact_seeds: true,
             hit_block: 1 << 20,
             mask: None,
-            // X-drop evidence: −0.2% AUC1 vs whole-diagonal Kadane on the
-            // tuning split, ~1.7× faster evidence on a 68 M-residue database
-            xdrop: 30,
+            // segment evidence: the best ungapped segment within 48 residues
+            // of the seed hits on each diagonal, scored in SIMD batches
+            // (`xdrop > 0` selects v0.3's scalar X-drop extension instead)
+            xdrop: 0,
+            regions: false,
+            diag_window: 48,
         }
     }
 
@@ -321,8 +390,6 @@ pub struct PrefilterStats {
     pub kmers_generated: u64,
     pub windows_at_cap: u64,
     pub exact_seeds_added: u64,
-    pub cache_hits: u64,
-    pub cache_misses: u64,
     pub lookups: u64,
     pub prefix_probes: u64,
     pub presence_rejects: u64,
@@ -350,7 +417,7 @@ impl PrefilterStats {
         macro_rules! sum { ($($f:ident),*) => { $( self.$f += o.$f; )* } }
         sum!(
             queries, windows, windows_skipped, kmers_generated, windows_at_cap, exact_seeds_added,
-            cache_hits, cache_misses, lookups, prefix_probes, presence_rejects, seeds, postings_visited, seeds_over_occ_cap,
+            lookups, prefix_probes, presence_rejects, seeds, postings_visited, seeds_over_occ_cap,
             postings_skipped_occ, blocks, hit_buffer_overruns, targets_hit, targets_evaluated,
             diagonals_scored, xdrop_extensions, chains_used, candidates, candidates_capped, ns_seeds, ns_hits, ns_evidence
         );
@@ -641,61 +708,30 @@ struct Seed {
 }
 
 /// Reusable per-worker prefilter memory.
+#[derive(Default)]
 pub struct PrefilterScratch {
     rows: Vec<SortedRow>,
     window_rows: Vec<SortedRow>,
     kw: KmerWork,
     kmers: Vec<(u64, i32)>,
     seeds: Vec<Seed>,
-    hits: Vec<(u64, u32)>,
+    /// packed seed hits of the current target block (and radix-sort buffer)
+    keys: Vec<u64>,
+    keys_tmp: Vec<u64>,
+    ev: EvidenceScratch,
+    dprof: DiagProfile,
     cands: Vec<Candidate>,
-    /// exact window code → (range in `cache_ranges`, at cap, k-mers generated)
-    /// (sequence queries only)
-    cache: HashMap<u64, (u32, u32, bool, u32)>,
-    /// resolved posting ranges of cached windows (k-mers present in the index)
-    cache_ranges: Vec<(usize, usize)>,
-    cache_key: (i32, usize),
-    /// Maximum cached posting ranges before the cache is reset (bounded memory).
-    pub cache_limit: usize,
-    /// The cache disables itself when its hit rate is too low to pay for the
-    /// copying (measured over the first `CACHE_PROBE` windows).
-    cache_enabled: bool,
-    cache_probe_windows: u64,
-    cache_probe_hits: u64,
     /// per-prefix posting ranges (see [`SeedIndex::prefix_ranges`])
     ranges: [(usize, usize); 20],
     /// k-mer runs of the current window that need an index probe
     runs: Vec<(u32, u32)>,
 }
 
-/// Windows over which the variant cache measures its hit rate.
-const CACHE_PROBE: u64 = 4096;
 /// Look-ahead distances (in probed runs) of the seed-lookup prefetches.
-const PF_BUCKET: usize = 8;
+const PF_LOOKUP: usize = 16;
+/// Look-ahead (in seeds) of the posting-list prefetches of the hit loop.
+const PF_POSTINGS: usize = 8;
 const PF_ENTRY: usize = 4;
-
-impl Default for PrefilterScratch {
-    fn default() -> Self {
-        PrefilterScratch {
-            rows: Vec::new(),
-            window_rows: Vec::new(),
-            kw: KmerWork::default(),
-            kmers: Vec::new(),
-            seeds: Vec::new(),
-            hits: Vec::new(),
-            cands: Vec::new(),
-            cache: HashMap::new(),
-            cache_ranges: Vec::new(),
-            cache_key: (i32::MIN, 0),
-            cache_limit: 1 << 19,
-            cache_enabled: true,
-            cache_probe_windows: 0,
-            cache_probe_hits: 0,
-            ranges: [(0, 0); 20],
-            runs: Vec::new(),
-        }
-    }
-}
 
 impl PrefilterScratch {
     pub fn new() -> Self {
@@ -705,10 +741,9 @@ impl PrefilterScratch {
     pub fn heap_bytes(&self) -> usize {
         self.rows.capacity() * std::mem::size_of::<SortedRow>()
             + self.seeds.capacity() * std::mem::size_of::<Seed>()
-            + self.hits.capacity() * 16
+            + (self.keys.capacity() + self.keys_tmp.capacity()) * 8
+            + self.ev.heap_bytes()
             + self.cands.capacity() * std::mem::size_of::<Candidate>()
-            + self.cache_ranges.capacity() * 16
-            + self.cache.capacity() * 32
             + self.kmers.capacity() * 16
             + (self.kw.dist.capacity() + self.kw.tmp.capacity()) * 8
             + self.kw.heap.capacity() * std::mem::size_of::<HeapItem>()
@@ -719,41 +754,12 @@ impl PrefilterScratch {
 pub struct PrefilterQuery<'a> {
     /// Seeding scores per query column (`[col][residue]`).
     pub seed_rows: &'a [[i32; ALPHABET_SIZE]],
-    /// Query residues for exact seeds and the variant cache (sequence queries).
+    /// Query residues for exact seeds (sequence queries).
     pub residues: Option<&'a [u8]>,
     /// Scores for ungapped extension (may include composition-bias correction).
     pub ext_rows: &'a [[i32; ALPHABET_SIZE]],
     /// Query columns excluded from seeding (low-complexity mask).
     pub seed_mask: Option<&'a [bool]>,
-}
-
-/// Best ungapped segment on diagonal `d`: `(score, q_start, q_end)`.
-#[inline]
-fn kadane(rows: &[[i32; ALPHABET_SIZE]], t: &[u8], d: i64) -> (i32, usize, usize) {
-    let m = rows.len() as i64;
-    let n = t.len() as i64;
-    let q0 = (-d).max(0);
-    let q1 = m.min(n - d);
-    let (mut best, mut bs, mut be) = (0i32, 0usize, 0usize);
-    let (mut cur, mut cs) = (0i32, q0 as usize);
-    let mut q = q0;
-    while q < q1 {
-        let tr = t[(q + d) as usize] as usize;
-        let s = if tr < ALPHABET_SIZE { rows[q as usize][tr] } else { 0 };
-        if cur <= 0 {
-            cur = s;
-            cs = q as usize;
-        } else {
-            cur += s;
-        }
-        if cur > best {
-            best = cur;
-            bs = cs;
-            be = q as usize;
-        }
-        q += 1;
-    }
-    (best, bs, be)
 }
 
 /// Best ungapped segment on diagonal `d` that contains the seed starting at
@@ -838,16 +844,11 @@ pub fn prefilter_query(
     sc.rows.extend(q.seed_rows.iter().map(sorted_row));
     sc.seeds.clear();
     let mut total_postings: usize = 0;
-    if q.residues.is_some() && sc.cache_key != (params.kmer_score, params.max_kmers_per_pos) {
-        sc.cache.clear();
-        sc.cache_ranges.clear();
-        sc.cache_key = (params.kmer_score, params.max_kmers_per_pos);
-        sc.cache_enabled = true;
-        sc.cache_probe_windows = 0;
-        sc.cache_probe_hits = 0;
-    }
     let occ_cap = params.max_seed_occ;
-    let presence = index.presence();
+    let direct = index.is_direct();
+    // the presence bitmap serves the sparse layout only (built once per
+    // index on first use; the direct table answers absence by itself)
+    let presence = if direct { None } else { Some(index.presence()) };
     #[inline]
     fn push_seed(
         seeds: &mut Vec<Seed>,
@@ -893,22 +894,6 @@ pub fn prefilter_query(
             continue;
         }
         let qpos = start as u32;
-        let use_cache = q.residues.is_some() && sc.cache_enabled;
-        if use_cache {
-            if let Some(&(a, b, at_cap, nk)) = sc.cache.get(&exact) {
-                stats.cache_hits += 1;
-                sc.cache_probe_hits += 1;
-                if at_cap {
-                    stats.windows_at_cap += 1;
-                }
-                for k in a as usize..b as usize {
-                    let rg = sc.cache_ranges[k];
-                    push_seed(&mut sc.seeds, stats, &mut total_postings, occ_cap, qpos, rg);
-                }
-                stats.kmers_generated += nk as u64;
-                continue;
-            }
-        }
         sc.window_rows.clear();
         for &off in pattern.offsets() {
             sc.window_rows.push(sc.rows[start + off]);
@@ -917,61 +902,76 @@ pub fn prefilter_query(
         if at_cap {
             stats.windows_at_cap += 1;
         }
-        // Resolve against the index in runs sharing the first w−1 residues
-        // (the generator emits k-mers grouped that way): a presence-bitmap test
-        // per k-mer, and one bucket probe per run that has a present k-mer.
-        let cache_a = sc.cache_ranges.len();
         let nk = sc.kmers.len();
         let mut have_exact = false;
-        // pass 1: the runs with at least one k-mer that may be present
-        sc.runs.clear();
-        let mut i = 0;
-        while i < nk {
-            let prefix = sc.kmers[i].0 / A;
-            let mut j = i;
-            let mut any = false;
-            while j < nk && sc.kmers[j].0 / A == prefix {
-                let c = sc.kmers[j].0;
-                have_exact |= c == exact;
-                if presence.may_contain(c) {
-                    any = true;
-                } else {
-                    stats.presence_rejects += 1;
+        if direct {
+            // direct layout (dense k-mer spaces): one pair of offsets per
+            // k-mer, fetched PF_LOOKUP k-mers ahead; a presence test would
+            // rarely reject anything
+            for r in 0..nk.min(PF_LOOKUP) {
+                index.prefetch_code(sc.kmers[r].0);
+            }
+            for k in 0..nk {
+                if k + PF_LOOKUP < nk {
+                    index.prefetch_code(sc.kmers[k + PF_LOOKUP].0);
                 }
-                j += 1;
-            }
-            if any {
-                sc.runs.push((i as u32, j as u32));
-            }
-            i = j;
-        }
-        // pass 2: probe them with a software-pipelined look-ahead (bucket
-        // entries PF_BUCKET runs ahead, k-mer table entries PF_ENTRY ahead) —
-        // the probes are independent random accesses into the index
-        let nr = sc.runs.len();
-        let run_prefix = |r: usize, kmers: &[(u64, i32)], runs: &[(u32, u32)]| kmers[runs[r].0 as usize].0 / A;
-        for r in 0..nr.min(PF_BUCKET) {
-            index.prefetch_prefix_bucket(run_prefix(r, &sc.kmers, &sc.runs));
-        }
-        for r in 0..nr {
-            if r + PF_BUCKET < nr {
-                index.prefetch_prefix_bucket(run_prefix(r + PF_BUCKET, &sc.kmers, &sc.runs));
-            }
-            if r + PF_ENTRY < nr {
-                index.prefetch_prefix_entries(run_prefix(r + PF_ENTRY, &sc.kmers, &sc.runs));
-            }
-            let (a, b) = sc.runs[r];
-            let prefix = sc.kmers[a as usize].0 / A;
-            let mask = index.prefix_ranges(prefix, &mut sc.ranges);
-            stats.prefix_probes += 1;
-            for k in a as usize..b as usize {
                 let c = sc.kmers[k].0;
-                let rr = (c % A) as usize;
-                if (mask >> rr) & 1 == 1 {
-                    let rg = sc.ranges[rr];
+                have_exact |= c == exact;
+                let rg = index.direct_range(c);
+                if rg.1 > rg.0 {
                     push_seed(&mut sc.seeds, stats, &mut total_postings, occ_cap, qpos, rg);
-                    if use_cache {
-                        sc.cache_ranges.push(rg);
+                }
+            }
+            stats.prefix_probes += nk as u64;
+        } else {
+            // sparse layout: resolve in runs sharing the first w−1 residues
+            // (the generator emits k-mers grouped that way) — a presence-bitmap
+            // test per k-mer, then one bucket probe per run with a present k-mer
+            sc.runs.clear();
+            let mut rejects = 0u64;
+            let mut i = 0;
+            while i < nk {
+                let prefix = sc.kmers[i].0 / A;
+                let mut j = i;
+                let mut any = false;
+                while j < nk && sc.kmers[j].0 / A == prefix {
+                    let c = sc.kmers[j].0;
+                    have_exact |= c == exact;
+                    let p = presence.is_some_and(|pr| pr.may_contain(c));
+                    any |= p;
+                    rejects += !p as u64;
+                    j += 1;
+                }
+                if any {
+                    sc.runs.push((i as u32, j as u32));
+                }
+                i = j;
+            }
+            stats.presence_rejects += rejects;
+            // probes with a software-pipelined look-ahead (bucket entries
+            // PF_LOOKUP runs ahead, k-mer table entries PF_ENTRY ahead) — the
+            // probes are independent random accesses into the index
+            let nr = sc.runs.len();
+            let run_prefix = |r: usize, kmers: &[(u64, i32)], runs: &[(u32, u32)]| kmers[runs[r].0 as usize].0 / A;
+            for r in 0..nr.min(PF_LOOKUP) {
+                index.prefetch_prefix_bucket(run_prefix(r, &sc.kmers, &sc.runs));
+            }
+            for r in 0..nr {
+                if r + PF_LOOKUP < nr {
+                    index.prefetch_prefix_bucket(run_prefix(r + PF_LOOKUP, &sc.kmers, &sc.runs));
+                }
+                if r + PF_ENTRY < nr {
+                    index.prefetch_prefix_entries(run_prefix(r + PF_ENTRY, &sc.kmers, &sc.runs));
+                }
+                let (a, b) = sc.runs[r];
+                let prefix = sc.kmers[a as usize].0 / A;
+                let mask = index.prefix_ranges(prefix, &mut sc.ranges);
+                stats.prefix_probes += 1;
+                for k in a as usize..b as usize {
+                    let c = sc.kmers[k].0;
+                    let rr = (c % A) as usize;
+                    if (mask >> rr) & 1 == 1 {
+                        push_seed(&mut sc.seeds, stats, &mut total_postings, occ_cap, qpos, sc.ranges[rr]);
                     }
                 }
             }
@@ -985,32 +985,9 @@ pub fn prefilter_query(
             let rg = index.posting_range(exact);
             if rg.1 > rg.0 {
                 push_seed(&mut sc.seeds, stats, &mut total_postings, occ_cap, qpos, rg);
-                if use_cache {
-                    sc.cache_ranges.push(rg);
-                }
             }
         }
-        let generated = nk + add_exact as usize;
-        stats.kmers_generated += generated as u64;
-        if use_cache {
-            stats.cache_misses += 1;
-            sc.cache_probe_windows += 1;
-            if sc.cache_ranges.len() > sc.cache_limit {
-                // bounded memory: start over
-                sc.cache.clear();
-                sc.cache_ranges.clear();
-            } else {
-                let b = sc.cache_ranges.len() as u32;
-                sc.cache.insert(exact, (cache_a as u32, b, at_cap, generated as u32));
-            }
-            // too few repeats to pay for the bookkeeping: switch the cache off
-            if sc.cache_probe_windows >= CACHE_PROBE && sc.cache_probe_hits * 50 < sc.cache_probe_windows {
-                sc.cache_enabled = false;
-                sc.cache.clear();
-                sc.cache_ranges.clear();
-                sc.cache_ranges.shrink_to_fit();
-            }
-        }
+        stats.kmers_generated += (nk + add_exact as usize) as u64;
     }
     stats.seeds += sc.seeds.len() as u64;
     stats.postings_visited += total_postings as u64;
@@ -1020,8 +997,22 @@ pub fn prefilter_query(
     }
 
     // ---- hits, by target block ------------------------------------------
+    // A hit is packed into one u64: (target − block start, diagonal + m,
+    // query position), most significant first, so one radix sort groups the
+    // hits of a target and, within it, of each diagonal (query positions
+    // ascending). Blocks are added when a block's target range would not fit
+    // the key.
     let n_targets = index.len() as u64;
-    let blocks = total_postings.div_ceil(params.hit_block).max(1) as u64;
+    let qbits = bits_for(m as u64 - 1);
+    let dbits = bits_for(m as u64 + index.max_seq_len() as u64);
+    assert!(qbits + dbits <= 62, "query/target too long for packed seed hits");
+    let sh_t = qbits + dbits;
+    let max_block_targets = 1u64 << (64 - sh_t).min(62);
+    let blocks = (total_postings.div_ceil(params.hit_block).max(1) as u64).max(n_targets.div_ceil(max_block_targets));
+    let kadane_mode = params.xdrop == 0;
+    let dk = if kadane_mode { crate::ungapped::diag_kernel() } else { DiagKernel::Scalar };
+    let simd = dk != DiagKernel::Scalar && sc.dprof.rebuild(q.ext_rows);
+    let dk = if simd { dk } else { DiagKernel::Scalar };
     let mut out: Vec<Candidate> = Vec::new();
     let mut ns_hits = 0u64;
     let mut ns_ev = 0u64;
@@ -1033,33 +1024,50 @@ pub fn prefilter_query(
         }
         let th = Instant::now();
         stats.blocks += 1;
-        sc.hits.clear();
-        let mb = m as i64;
-        for s in sc.seeds.iter_mut() {
-            let list = index.postings_in(s.cur, s.end);
-            let mut k = 0;
-            while k < list.len() {
-                let p = list[k];
-                let tid = p >> 32;
+        sc.keys.clear();
+        let mb = m as u64;
+        let ns = sc.seeds.len();
+        for si in 0..ns {
+            // the posting lists are random accesses: fetch a few seeds ahead
+            if si + PF_POSTINGS < ns {
+                index.prefetch_posting(sc.seeds[si + PF_POSTINGS].cur);
+            }
+            let s = &mut sc.seeds[si];
+            let (mut k, end) = (s.cur, s.end);
+            let qp = s.qpos as u64;
+            while k < end {
+                let (tid, tpos) = index.posting(k);
                 if tid >= t_hi {
                     break;
                 }
-                let tpos = (p & 0xFFFF_FFFF) as i64;
-                let diag = tpos - s.qpos as i64;
-                sc.hits.push(((tid << 32) | (diag + mb) as u64, s.qpos));
+                sc.keys.push(((tid - t_lo) << sh_t) | ((tpos + mb - qp) << qbits) | qp);
                 k += 1;
             }
-            s.cur += k;
+            s.cur = k;
         }
-        let nh = sc.hits.len() as u64;
+        let nh = sc.keys.len() as u64;
         stats.hit_buffer_peak = stats.hit_buffer_peak.max(nh);
         if nh as usize > params.hit_block {
             stats.hit_buffer_overruns += 1;
         }
-        sc.hits.sort_unstable();
+        // whole-diagonal evidence does not need the query positions in order
+        let lo_bit = if kadane_mode { qbits } else { 0 };
+        radix_sort_u64(&mut sc.keys, &mut sc.keys_tmp, lo_bit, sh_t + bits_for(t_hi - t_lo - 1));
         ns_hits += th.elapsed().as_nanos() as u64;
         let te = Instant::now();
-        evaluate_block(&sc.hits, q.ext_rows, index, params, gaps, mb, span, stats, &mut out);
+        let lay = KeyLayout {
+            qbits,
+            dmask: (1u64 << dbits) - 1,
+            sh_t,
+            t_lo,
+            m: m as i64,
+        };
+        let PrefilterScratch { keys, ev, dprof, .. } = sc;
+        if kadane_mode {
+            evaluate_block_kadane(keys, &lay, q.ext_rows, dk, dprof, index, params, gaps, span, stats, ev, &mut out);
+        } else {
+            evaluate_block_xdrop(keys, &lay, q.ext_rows, index, params, gaps, span, stats, &mut out);
+        }
         ns_ev += te.elapsed().as_nanos() as u64;
     }
     stats.ns_hits += ns_hits;
@@ -1077,20 +1085,208 @@ pub fn prefilter_query(
     out
 }
 
+/// Bits needed to represent every value in `0..=x` (0 for `x = 0`).
+#[inline]
+fn bits_for(x: u64) -> u32 {
+    64 - x.leading_zeros()
+}
+
+/// LSD radix sort of `v` by bits `[lo_bit, hi_bit)` (11-bit digits; digits
+/// that are equal in every key are skipped). Stable, so keys equal in the
+/// sorted bits keep their input order.
+fn radix_sort_u64(v: &mut Vec<u64>, tmp: &mut Vec<u64>, lo_bit: u32, hi_bit: u32) {
+    const D: u32 = 11;
+    const NB: usize = 1 << D;
+    let n = v.len();
+    if n < 2 || hi_bit <= lo_bit {
+        return;
+    }
+    if n <= 48 {
+        // tiny: insertion sort on the masked key (stable)
+        let mask = if hi_bit >= 64 { u64::MAX } else { (1u64 << hi_bit) - 1 } & !((1u64 << lo_bit) - 1);
+        for i in 1..n {
+            let x = v[i];
+            let kx = x & mask;
+            let mut j = i;
+            while j > 0 && v[j - 1] & mask > kx {
+                v[j] = v[j - 1];
+                j -= 1;
+            }
+            v[j] = x;
+        }
+        return;
+    }
+    tmp.clear();
+    tmp.resize(n, 0);
+    let mut cnt = [0u32; NB];
+    let mut shift = lo_bit;
+    while shift < hi_bit {
+        let width = (hi_bit - shift).min(D);
+        let dmask = (1u64 << width) - 1;
+        cnt[..1 << width].fill(0);
+        for &x in v.iter() {
+            cnt[((x >> shift) & dmask) as usize] += 1;
+        }
+        if cnt[..1 << width].iter().any(|&c| c as usize == n) {
+            shift += width;
+            continue; // one bucket: this digit is constant
+        }
+        let mut sum = 0u32;
+        for c in cnt[..1 << width].iter_mut() {
+            let t = *c;
+            *c = sum;
+            sum += t;
+        }
+        for &x in v.iter() {
+            let d = ((x >> shift) & dmask) as usize;
+            // SAFETY-free indexing: cnt[d] < n by construction
+            tmp[cnt[d] as usize] = x;
+            cnt[d] += 1;
+        }
+        std::mem::swap(v, tmp);
+        shift += width;
+    }
+}
+
+/// Field layout of a packed seed hit (see `prefilter_query`).
+struct KeyLayout {
+    qbits: u32,
+    dmask: u64,
+    sh_t: u32,
+    t_lo: u64,
+    m: i64,
+}
+
+impl KeyLayout {
+    #[inline]
+    fn tid(&self, k: u64) -> u64 {
+        (k >> self.sh_t) + self.t_lo
+    }
+    #[inline]
+    fn diag(&self, k: u64) -> i64 {
+        ((k >> self.qbits) & self.dmask) as i64 - self.m
+    }
+    #[inline]
+    fn qpos(&self, k: u64) -> usize {
+        (k & ((1u64 << self.qbits) - 1)) as usize
+    }
+    /// (target, diagonal) identity of a hit
+    #[inline]
+    fn td(&self, k: u64) -> u64 {
+        k >> self.qbits
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct DiagRun {
     diag: i64,
     count: u32,
+    /// index of the run's first hit in the block's key array
+    start: u32,
+    /// smallest / largest query position of the run's seed hits
+    qmin: u32,
+    qmax: u32,
 }
 
+/// The `kmax` best-supported diagonals of one target's (sorted) hits: count
+/// descending, then diagonal ascending.
+#[inline]
+fn top_diagonals(group: &[u64], base: usize, lay: &KeyLayout, kmax: usize, top: &mut Vec<DiagRun>) {
+    top.clear();
+    let mut a = 0;
+    while a < group.len() {
+        let key = lay.td(group[a]);
+        let q0 = lay.qpos(group[a]) as u32;
+        let (mut qmin, mut qmax) = (q0, q0);
+        let mut b = a + 1;
+        while b < group.len() && lay.td(group[b]) == key {
+            let q = lay.qpos(group[b]) as u32;
+            qmin = qmin.min(q);
+            qmax = qmax.max(q);
+            b += 1;
+        }
+        let run = DiagRun {
+            diag: lay.diag(group[a]),
+            count: (b - a) as u32,
+            start: (base + a) as u32,
+            qmin,
+            qmax,
+        };
+        a = b;
+        // insert keeping `top` sorted, size ≤ kmax
+        let pos = top.iter().position(|t| run.count > t.count).unwrap_or(top.len());
+        if pos < kmax {
+            top.insert(pos, run);
+            if top.len() > kmax {
+                top.pop();
+            }
+        }
+    }
+}
+
+/// Best single segment / co-linear chain of two segments, v0.3 rules:
+/// `segs[k] = (score, q_start, q_end, diag)`. Returns `(score, used)`.
+fn best_or_chain(segs: &[(i32, usize, usize, i64)], gaps: GapCosts, stats: &mut PrefilterStats) -> (i32, [usize; 2], usize) {
+    let ns = segs.len();
+    let mut best = (0i32, 0usize);
+    for (k, sg) in segs.iter().enumerate() {
+        if sg.0 > best.0 {
+            best = (sg.0, k);
+        }
+    }
+    let mut chain = (i32::MIN, 0usize, 0usize);
+    for x in 0..ns {
+        for y in 0..ns {
+            if x == y {
+                continue;
+            }
+            let (sx, _qsx, qex, dx) = segs[x];
+            let (sy, qsy, _qey, dy) = segs[y];
+            if sx <= 0 || sy <= 0 || dx == dy {
+                continue;
+            }
+            let tex = qex as i64 + dx;
+            let tsy = qsy as i64 + dy;
+            if qex < qsy && tex < tsy {
+                let g = gaps.cost((dy - dx).unsigned_abs() as usize);
+                let c = sx + sy - g;
+                if c > chain.0 {
+                    chain = (c, x, y);
+                }
+            }
+        }
+    }
+    if chain.0 > best.0 {
+        stats.chains_used += 1;
+        (chain.0, [chain.1, chain.2], best.1)
+    } else {
+        (best.0, [best.1, best.1], best.1)
+    }
+}
+
+/// Target region covered by the used segments.
+#[inline]
+fn region(segs: &[(i32, usize, usize, i64)], used: [usize; 2]) -> (u32, u32) {
+    let mut lo = u32::MAX;
+    let mut hi = 0u32;
+    for &u in &used {
+        let (_, qs, qe, d) = segs[u];
+        lo = lo.min((qs as i64 + d).max(0) as u32);
+        hi = hi.max((qe as i64 + d).max(0) as u32);
+    }
+    (lo, hi)
+}
+
+/// X-drop evidence (`--ungapped-xdrop > 0`): one extension per seed hit not
+/// already covered, scalar.
 #[allow(clippy::too_many_arguments)]
-fn evaluate_block(
-    hits: &[(u64, u32)],
+fn evaluate_block_xdrop(
+    keys: &[u64],
+    lay: &KeyLayout,
     ext_rows: &[[i32; ALPHABET_SIZE]],
     index: &SeedIndex,
     params: &PrefilterParams,
     gaps: GapCosts,
-    mb: i64,
     span: usize,
     stats: &mut PrefilterStats,
     out: &mut Vec<Candidate>,
@@ -1098,113 +1294,339 @@ fn evaluate_block(
     let kmax = params.max_diagonals;
     let mut top: Vec<DiagRun> = Vec::with_capacity(kmax + 1);
     let mut i = 0;
-    while i < hits.len() {
-        let tid = hits[i].0 >> 32;
-        let mut j = i;
-        while j < hits.len() && hits[j].0 >> 32 == tid {
+    while i < keys.len() {
+        let tid = lay.tid(keys[i]);
+        let mut j = i + 1;
+        while j < keys.len() && lay.tid(keys[j]) == tid {
             j += 1;
         }
         stats.targets_hit += 1;
-        let group = &hits[i..j];
+        let group = &keys[i..j];
+        let base = i;
         i = j;
-        // look-ahead: targets are visited in id order but their residues are
-        // scattered; fetch offsets 16 hits ahead and residues 8 hits ahead
-        if let Some(h) = hits.get(j + 16) {
-            index.prefetch_offset((h.0 >> 32) as usize);
+        // look-ahead: fetch offsets 16 hits ahead and residues 8 hits ahead
+        if let Some(&h) = keys.get(j + 16) {
+            index.prefetch_offset(lay.tid(h) as usize);
         }
-        if let Some(h) = hits.get(j + 8) {
-            let d = (h.0 & 0xFFFF_FFFF) as i64 - mb;
-            let tpos = (h.1 as i64 + d).max(0) as usize;
-            index.prefetch_residues((h.0 >> 32) as usize, tpos);
+        if let Some(&h) = keys.get(j + 8) {
+            let tpos = (lay.qpos(h) as i64 + lay.diag(h)).max(0) as usize;
+            index.prefetch_residues(lay.tid(h) as usize, tpos);
         }
         if group.len() < params.min_hits {
             continue;
         }
-        // top-k diagonals by support (count desc, diag asc)
-        top.clear();
-        let mut a = 0;
-        while a < group.len() {
-            let key = group[a].0;
-            let mut b = a;
-            while b < group.len() && group[b].0 == key {
-                b += 1;
-            }
-            let run = DiagRun {
-                diag: (key & 0xFFFF_FFFF) as i64 - mb,
-                count: (b - a) as u32,
-            };
-            a = b;
-            // insert keeping `top` sorted, size ≤ kmax
-            let pos = top
-                .iter()
-                .position(|t| run.count > t.count)
-                .unwrap_or(top.len());
-            if pos < kmax {
-                top.insert(pos, run);
-                if top.len() > kmax {
-                    top.pop();
-                }
-            }
-        }
+        top_diagonals(group, base, lay, kmax, &mut top);
         if (top[0].count as usize) < params.diag_hits {
             continue;
         }
         stats.targets_evaluated += 1;
         let t = index.seq(tid as usize);
-        let mut segs: [(i32, usize, usize, i64); 16] = [(0, 0, 0, 0); 16];
         let ns = top.len().min(16);
-        let mut best = (0i32, 0usize);
+        let mut segs: [(i32, usize, usize, i64); 16] = [(0, 0, 0, 0); 16];
         for (k, run) in top.iter().take(ns).enumerate() {
-            let (s, qs, qe) = if params.xdrop > 0 {
-                // extend from each seed of this diagonal not already covered
-                let key = (tid << 32) | (run.diag + mb) as u64;
-                let lo = group.partition_point(|h| h.0 < key);
-                let mut seg = (i32::MIN, 0usize, 0usize);
-                let mut covered_to: i64 = -1;
-                for h in group[lo..].iter().take_while(|h| h.0 == key) {
-                    let qp = h.1 as usize;
-                    if (qp as i64) <= covered_to {
-                        continue;
-                    }
-                    let r = xdrop_segment(ext_rows, t, run.diag, qp, span, params.xdrop);
-                    stats.xdrop_extensions += 1;
-                    covered_to = r.2 as i64;
-                    if r.0 > seg.0 {
-                        seg = r;
-                    }
+            let mut seg = (i32::MIN, 0usize, 0usize);
+            let mut covered_to: i64 = -1;
+            for &h in &keys[run.start as usize..(run.start + run.count) as usize] {
+                let qp = lay.qpos(h);
+                if (qp as i64) <= covered_to {
+                    continue;
                 }
-                seg
-            } else {
-                kadane(ext_rows, t, run.diag)
-            };
+                let r = xdrop_segment(ext_rows, t, run.diag, qp, span, params.xdrop);
+                stats.xdrop_extensions += 1;
+                covered_to = r.2 as i64;
+                if r.0 > seg.0 {
+                    seg = r;
+                }
+            }
             stats.diagonals_scored += 1;
-            segs[k] = (s, qs, qe, run.diag);
-            if s > best.0 {
-                best = (s, k);
+            segs[k] = (seg.0, seg.1, seg.2, run.diag);
+        }
+        let (score, used, bi) = best_or_chain(&segs[..ns], gaps, stats);
+        if score < params.min_diag_score {
+            continue;
+        }
+        let (lo, hi) = region(&segs[..ns], used);
+        out.push(Candidate {
+            target_id: tid as u32,
+            hits: group.len() as u32,
+            best_diag: segs[bi].3,
+            diag_score: score,
+            t_lo: lo,
+            t_hi: hi,
+        });
+    }
+}
+
+/// One diagonal awaiting its batched score.
+#[derive(Clone, Copy)]
+struct Job {
+    tid: u32,
+    diag: i32,
+    /// query positions to score
+    lo: u32,
+    hi: u32,
+}
+
+/// One target awaiting batched diagonal scores.
+#[derive(Clone, Copy)]
+struct TargetRec {
+    tid: u32,
+    hits: u32,
+    j0: u32,
+    j1: u32,
+}
+
+/// Diagonals scored per evidence chunk: bounds the evidence buffers
+/// independently of the hit-block size.
+const EV_CHUNK: usize = 1 << 14;
+
+/// Reusable buffers of the segment evidence.
+#[derive(Default)]
+pub(crate) struct EvidenceScratch {
+    top: Vec<DiagRun>,
+    targets: Vec<TargetRec>,
+    jobs: Vec<Job>,
+    /// jobs ordered by window start (lanes of a batch share query positions)
+    order: Vec<u32>,
+    counts: Vec<u32>,
+    scores: Vec<i32>,
+    lane_out: Vec<i32>,
+    diag: crate::ungapped::DiagScratch,
+}
+
+impl EvidenceScratch {
+    fn heap_bytes(&self) -> usize {
+        self.targets.capacity() * std::mem::size_of::<TargetRec>()
+            + self.jobs.capacity() * std::mem::size_of::<Job>()
+            + (self.order.capacity() + self.counts.capacity() + self.scores.capacity() + self.lane_out.capacity()) * 4
+    }
+}
+
+/// Segment evidence (`--ungapped-xdrop 0`, the default): the best ungapped
+/// segment on each kept diagonal (within `diag_window` of its seed hits, or
+/// anywhere on it), scored in SIMD batches (see [`crate::ungapped`]);
+/// segment boundaries are computed only where a chain could change the score
+/// and, with `regions`, for passing targets. With `diag_window = 0` the
+/// results equal v0.3's scalar whole-diagonal mode.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_block_kadane(
+    keys: &[u64],
+    lay: &KeyLayout,
+    ext_rows: &[[i32; ALPHABET_SIZE]],
+    dk: DiagKernel,
+    dprof: &DiagProfile,
+    index: &SeedIndex,
+    params: &PrefilterParams,
+    gaps: GapCosts,
+    span: usize,
+    stats: &mut PrefilterStats,
+    ev: &mut EvidenceScratch,
+    out: &mut Vec<Candidate>,
+) {
+    let kmax = params.max_diagonals;
+    let mq = ext_rows.len();
+    ev.targets.clear();
+    ev.jobs.clear();
+    // group hits by target, choose diagonals; score in chunks
+    let mut i = 0;
+    while i < keys.len() {
+        let tid = lay.tid(keys[i]);
+        let mut j = i + 1;
+        while j < keys.len() && lay.tid(keys[j]) == tid {
+            j += 1;
+        }
+        stats.targets_hit += 1;
+        let group = &keys[i..j];
+        let base = i;
+        i = j;
+        if let Some(&h) = keys.get(j + 16) {
+            index.prefetch_offset(lay.tid(h) as usize);
+        }
+        if group.len() < params.min_hits {
+            continue;
+        }
+        if group.len() == 1 {
+            // the common case: a single seed hit
+            let h = group[0];
+            let q = lay.qpos(h) as u32;
+            ev.top.clear();
+            ev.top.push(DiagRun {
+                diag: lay.diag(h),
+                count: 1,
+                start: base as u32,
+                qmin: q,
+                qmax: q,
+            });
+        } else {
+            top_diagonals(group, base, lay, kmax, &mut ev.top);
+        }
+        if (ev.top[0].count as usize) < params.diag_hits {
+            continue;
+        }
+        stats.targets_evaluated += 1;
+        let j0 = ev.jobs.len() as u32;
+        let len = index.seq_len(tid as usize);
+        for run in ev.top.iter().take(16) {
+            let (mut lo, mut hi) = crate::ungapped::diag_range(mq, len, run.diag);
+            if params.diag_window > 0 {
+                lo = lo.max((run.qmin as usize).saturating_sub(params.diag_window));
+                hi = hi.min(run.qmax as usize + span + params.diag_window);
+            }
+            ev.jobs.push(Job {
+                tid: tid as u32,
+                diag: run.diag as i32,
+                lo: lo as u32,
+                hi: hi.max(lo) as u32,
+            });
+        }
+        ev.targets.push(TargetRec {
+            tid: tid as u32,
+            hits: group.len() as u32,
+            j0,
+            j1: ev.jobs.len() as u32,
+        });
+        if ev.jobs.len() >= EV_CHUNK {
+            score_and_gate(ext_rows, dk, dprof, index, params, gaps, stats, ev, out);
+        }
+    }
+    score_and_gate(ext_rows, dk, dprof, index, params, gaps, stats, ev, out);
+}
+
+/// Score the pending diagonals of `ev` in lane batches, then chain, gate and
+/// emit candidates for the pending targets; clears both lists.
+#[allow(clippy::too_many_arguments)]
+fn score_and_gate(
+    ext_rows: &[[i32; ALPHABET_SIZE]],
+    dk: DiagKernel,
+    dprof: &DiagProfile,
+    index: &SeedIndex,
+    params: &PrefilterParams,
+    gaps: GapCosts,
+    stats: &mut PrefilterStats,
+    ev: &mut EvidenceScratch,
+    out: &mut Vec<Candidate>,
+) {
+    let njobs = ev.jobs.len();
+    if njobs == 0 {
+        ev.targets.clear();
+        return;
+    }
+    stats.diagonals_scored += njobs as u64;
+    let mq = ext_rows.len();
+    let nl = dk.lanes();
+    ev.scores.clear();
+    ev.scores.resize(njobs, 0);
+    ev.lane_out.clear();
+    ev.lane_out.resize(nl, 0);
+    // ---- order jobs by window start (counting sort) so the lanes of a batch
+    // cover the same query positions
+    ev.counts.clear();
+    ev.counts.resize(mq + 1, 0);
+    for jb in &ev.jobs {
+        ev.counts[jb.lo as usize] += 1;
+    }
+    let mut acc = 0u32;
+    for c in ev.counts.iter_mut() {
+        let t = *c;
+        *c = acc;
+        acc += t;
+    }
+    ev.order.clear();
+    ev.order.resize(njobs, 0);
+    for (j, jb) in ev.jobs.iter().enumerate() {
+        let slot = &mut ev.counts[jb.lo as usize];
+        ev.order[*slot as usize] = j as u32;
+        *slot += 1;
+    }
+    // ---- score in lane batches, prefetching the next batch's residues
+    let prefetch_batch = |order: &[u32], jobs: &[Job]| {
+        for &j in order {
+            let jb = &jobs[j as usize];
+            if jb.lo < jb.hi {
+                let (start, _) = index.seq_span(jb.tid as usize);
+                let a = (jb.lo as i64 + jb.diag as i64) as usize;
+                let b = (jb.hi as i64 + jb.diag as i64) as usize;
+                index.prefetch_residue_range(start + a, start + b);
             }
         }
-        // chains of two co-linear segments
+    };
+    let mut lanes: Vec<Lane> = Vec::with_capacity(nl);
+    prefetch_batch(&ev.order[..nl.min(njobs)], &ev.jobs);
+    let mut c0 = 0;
+    while c0 < njobs {
+        let c1 = (c0 + nl).min(njobs);
+        let p1 = (c1 + nl).min(njobs);
+        prefetch_batch(&ev.order[c1..p1], &ev.jobs);
+        lanes.clear();
+        for &j in &ev.order[c0..c1] {
+            let jb = &ev.jobs[j as usize];
+            lanes.push(Lane {
+                target: index.seq(jb.tid as usize),
+                diag: jb.diag as i64,
+                lo: jb.lo as usize,
+                hi: jb.hi as usize,
+            });
+        }
+        crate::ungapped::score_batch(dk, dprof, ext_rows, &lanes, &mut ev.lane_out, &mut ev.diag);
+        for (i, &j) in ev.order[c0..c1].iter().enumerate() {
+            ev.scores[j as usize] = ev.lane_out[i];
+        }
+        c0 = c1;
+    }
+    // ---- chains, gate, candidates
+    let mut segs: [(i32, usize, usize, i64); 16] = [(0, 0, 0, 0); 16];
+    let mut have_pos = [false; 16];
+    for tr in &ev.targets {
+        let js = tr.j0 as usize..tr.j1 as usize;
+        let ns = js.len();
+        if ns == 1 && ev.scores[tr.j0 as usize] < params.min_diag_score {
+            continue; // the common case: one diagonal, below the gate
+        }
+        let mut best = (0i32, 0usize);
+        for (k, jj) in js.clone().enumerate() {
+            let sc = ev.scores[jj];
+            segs[k] = (sc, 0, 0, ev.jobs[jj].diag as i64);
+            have_pos[k] = false;
+            if sc > best.0 {
+                best = (sc, k);
+            }
+        }
+        let t = index.seq(tr.tid as usize);
+        let mut pos_of = |k: usize, segs: &mut [(i32, usize, usize, i64); 16]| {
+            if !have_pos[k] {
+                let jb = &ev.jobs[tr.j0 as usize + k];
+                let (s2, qs, qe) = crate::ungapped::kadane_segment(ext_rows, t, segs[k].3, jb.lo as usize, jb.hi as usize);
+                debug_assert_eq!(s2, segs[k].0);
+                segs[k].1 = qs;
+                segs[k].2 = qe;
+                have_pos[k] = true;
+            }
+        };
+        // chains of two co-linear segments: only pairs whose chain value
+        // could exceed the best single segment need boundaries
         let mut chain = (i32::MIN, 0usize, 0usize);
-        for x in 0..ns {
-            for y in 0..ns {
-                if x == y {
-                    continue;
-                }
-                let (sx, qsx, qex, dx) = segs[x];
-                let (sy, qsy, _qey, dy) = segs[y];
-                if sx <= 0 || sy <= 0 || dx == dy {
-                    continue;
-                }
-                let tex = qex as i64 + dx;
-                let tsy = qsy as i64 + dy;
-                if qex < qsy && tex < tsy {
-                    let g = gaps.cost((dy - dx).unsigned_abs() as usize);
-                    let c = sx + sy - g;
-                    if c > chain.0 {
+        if ns > 1 {
+            for x in 0..ns {
+                for y in 0..ns {
+                    if x == y {
+                        continue;
+                    }
+                    let (sx, dx) = (segs[x].0, segs[x].3);
+                    let (sy, dy) = (segs[y].0, segs[y].3);
+                    if sx <= 0 || sy <= 0 || dx == dy {
+                        continue;
+                    }
+                    let c = sx + sy - gaps.cost((dy - dx).unsigned_abs() as usize);
+                    if c <= best.0 || c <= chain.0 {
+                        continue; // cannot change the result
+                    }
+                    pos_of(x, &mut segs);
+                    pos_of(y, &mut segs);
+                    let (qex, qsy) = (segs[x].2, segs[y].1);
+                    if qex < qsy && (qex as i64 + dx) < (qsy as i64 + dy) {
                         chain = (c, x, y);
                     }
                 }
-                let _ = qsx;
             }
         }
         let (score, used) = if chain.0 > best.0 {
@@ -1216,24 +1638,25 @@ fn evaluate_block(
         if score < params.min_diag_score {
             continue;
         }
-        let mut lo = u32::MAX;
-        let mut hi = 0u32;
-        for &u in &used {
-            let (_, qs, qe, d) = segs[u];
-            let ts = (qs as i64 + d).max(0) as u32;
-            let te = (qe as i64 + d).max(0) as u32;
-            lo = lo.min(ts);
-            hi = hi.max(te);
-        }
+        let (lo, hi) = if params.regions {
+            for &u in &used {
+                pos_of(u, &mut segs);
+            }
+            region(&segs[..ns], used)
+        } else {
+            (0, u32::MAX)
+        };
         out.push(Candidate {
-            target_id: tid as u32,
-            hits: group.len() as u32,
+            target_id: tr.tid,
+            hits: tr.hits,
             best_diag: segs[best.1].3,
             diag_score: score,
             t_lo: lo,
             t_hi: hi,
         });
     }
+    ev.jobs.clear();
+    ev.targets.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -1601,26 +2024,6 @@ mod tests {
     }
 
     #[test]
-    fn variant_cache_does_not_change_results() {
-        let m = SubstitutionMatrix::blosum62();
-        let db = db_from(">a\nMKVLLACDEFGHIKMKVLLACDEFGHIK\n>b\nGGGMKVLLACDEFGG\n");
-        let idx = KmerIndex::build(&db, 5);
-        let qn = enc("MKVLLACDEFGHIKMKVLLACDEFGHIK"); // repeated windows hit the cache
-        let rows = rows_of(&SeqScorer { query: &qn, mat: &m });
-        let q = PrefilterQuery { seed_rows: &rows, residues: Some(&qn), ext_rows: &rows, seed_mask: None };
-        let mut p = PrefilterParams::default();
-        p.k = 5;
-        let mut sc = PrefilterScratch::new();
-        let mut st = PrefilterStats::default();
-        let a = prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut sc, &mut st);
-        assert!(st.cache_hits > 0);
-        let mut off = PrefilterScratch::new();
-        off.cache_enabled = false;
-        let b = prefilter_query(&q, &idx, &p, GapCosts::sequence_default(), &mut off, &mut PrefilterStats::default());
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn seed_pattern_parsing() {
         let p = SeedPattern::from_mask("1101011").unwrap();
         assert_eq!(p.weight(), 5);
@@ -1673,7 +2076,7 @@ mod tests {
             let s = 1.0 + i as f64 * 0.1;
             let (k, c, g) = sequence_preset(s);
             assert!(k <= prev.0 && c >= prev.1, "s={} -> {:?}", s, (k, c, g));
-            assert!(c % 32 == 0 && g >= 30);
+            assert!(c % 32 == 0 && (GATE_MIN..=GATE_MAX).contains(&g));
             prev = (k, c);
         }
         for &(s, k, c, g) in SEQUENCE_PRESETS.iter() {
@@ -1681,6 +2084,31 @@ mod tests {
         }
         let d = PrefilterParams::sequence_default();
         assert_eq!(sequence_preset(5.7), (d.kmer_score, d.max_kmers_per_pos, d.min_diag_score));
+    }
+
+    #[test]
+    fn size_adjusted_gate_follows_database_size() {
+        let r = GATE_REF_RESIDUES as usize;
+        assert_eq!(size_adjusted_gate(42, r), 42);
+        let mut prev = i32::MIN;
+        for e in -14..=8 {
+            let n = (GATE_REF_RESIDUES * (e as f64 / 2.0).exp()) as usize;
+            let g = size_adjusted_gate(42, n);
+            assert!(g >= prev, "gate must not fall as the database grows");
+            assert!((GATE_MIN..=GATE_MAX).contains(&g));
+            prev = g;
+        }
+        // two e-folds below / above the reference
+        let e2 = std::f64::consts::E.powi(2);
+        assert_eq!(size_adjusted_gate(42, (GATE_REF_RESIDUES / e2) as usize), (42.0 - 2.0 * GATE_SLOPE_BELOW).round() as i32);
+        assert_eq!(size_adjusted_gate(42, (GATE_REF_RESIDUES * e2) as usize), (42.0 + 2.0 * GATE_SLOPE_ABOVE).round() as i32);
+        // tiny and empty databases are clamped
+        assert_eq!(size_adjusted_gate(42, 0), GATE_MIN);
+        assert_eq!(size_adjusted_gate(42, 10), GATE_MIN);
+        // the measured operating points (bench/README.md)
+        assert_eq!(size_adjusted_gate(42, 2_611_087), 33);
+        assert_eq!(size_adjusted_gate(42, 68_310_060), 41);
+        assert_eq!(size_adjusted_gate(42, 265_123_580), 43);
     }
 
     #[test]

@@ -1,0 +1,182 @@
+{
+ "set": "prefetch",
+ "queries": {
+  "fasta": "/home/claude/bench_data/ds_scale/q_tune.fa",
+  "sha256": "c0f2031d033b2ce9c7f1a55404335d525351bda42db1fe4f259ba846db7a99cf"
+ },
+ "target": "/home/claude/exp_dbs/st_scale_sp9.stidx",
+ "rounds": 3,
+ "threads": 2,
+ "host": {
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "cpus": 2,
+  "kernel": "6.18.44-fc-v139"
+ },
+ "binaries": {
+  "dev_pf": {
+   "path": "/home/claude/bin/st_pf",
+   "sha256": "95fc2acb990f0d1fc1edd0bb7d3019a7a677cd1e4f43cfca210ca716ef49bffe"
+  },
+  "dev_nopf": {
+   "path": "/home/claude/bin/st_nopf",
+   "sha256": "fe9f7fbe40429ac95e572baa4c66627a0a7b4dafa39d46811d92697844be85c0"
+  }
+ },
+ "variants": {
+  "prefetch": {
+   "command": [
+    "/home/claude/bin/st_pf",
+    "search",
+    "/home/claude/bench_data/ds_scale/q_tune.fa",
+    "/home/claude/exp_dbs/st_scale_sp9.stidx",
+    "--evalue",
+    "10",
+    "--max-hits",
+    "4000",
+    "--threads",
+    "2",
+    "--out",
+    "<hits>",
+    "--stats-json",
+    "<stats>",
+    "--spaced",
+    "111001101",
+    "--kmer-score",
+    "22",
+    "--max-kmers",
+    "512",
+    "--min-diag-score",
+    "41"
+   ],
+   "env": {},
+   "hits_sha256": "a13f4bea49a8bd78a01697156f289227854aa7e5100489d1eb576caebade1b4c",
+   "wall_s": {
+    "median": 4.918834607999997,
+    "min": 4.754898346999653,
+    "max": 4.9950559170001725
+   },
+   "peak_rss_mib_max": 598.38671875,
+   "cpu_s": {
+    "diagonal_evidence": {
+     "min": 3.940594,
+     "max": 4.160705
+    },
+    "gapped_scoring": {
+     "min": 1.302384,
+     "max": 1.341284
+    },
+    "hit_collection_sort": {
+     "min": 1.235537,
+     "max": 1.290831
+    },
+    "prefilter": {
+     "min": 7.269279,
+     "max": 7.667163
+    },
+    "seed_generation": {
+     "min": 2.080883,
+     "max": 2.202859
+    },
+    "setup": {
+     "min": 0.047851,
+     "max": 0.057228
+    },
+    "traceback": {
+     "min": 0.832464,
+     "max": 0.854357
+    }
+   },
+   "auc1": 0.1930275485879436,
+   "tp_fp_1e-3": [
+    4130,
+    2
+   ],
+   "fp_at_recall": {
+    "0.04": 1,
+    "0.05": 1,
+    "0.06": 1,
+    "0.07": 5,
+    "0.08": 277,
+    "0.1": null
+   }
+  },
+  "no_prefetch": {
+   "command": [
+    "/home/claude/bin/st_nopf",
+    "search",
+    "/home/claude/bench_data/ds_scale/q_tune.fa",
+    "/home/claude/exp_dbs/st_scale_sp9.stidx",
+    "--evalue",
+    "10",
+    "--max-hits",
+    "4000",
+    "--threads",
+    "2",
+    "--out",
+    "<hits>",
+    "--stats-json",
+    "<stats>",
+    "--spaced",
+    "111001101",
+    "--kmer-score",
+    "22",
+    "--max-kmers",
+    "512",
+    "--min-diag-score",
+    "41"
+   ],
+   "env": {},
+   "hits_sha256": "a13f4bea49a8bd78a01697156f289227854aa7e5100489d1eb576caebade1b4c",
+   "wall_s": {
+    "median": 5.123555653999574,
+    "min": 4.992182496999703,
+    "max": 5.22237860200039
+   },
+   "peak_rss_mib_max": 598.49609375,
+   "cpu_s": {
+    "diagonal_evidence": {
+     "min": 3.951403,
+     "max": 4.181902
+    },
+    "gapped_scoring": {
+     "min": 1.281482,
+     "max": 1.322057
+    },
+    "hit_collection_sort": {
+     "min": 1.722132,
+     "max": 1.822592
+    },
+    "prefilter": {
+     "min": 7.772319,
+     "max": 8.178406
+    },
+    "seed_generation": {
+     "min": 2.087062,
+     "max": 2.161276
+    },
+    "setup": {
+     "min": 0.048005,
+     "max": 0.049861
+    },
+    "traceback": {
+     "min": 0.824403,
+     "max": 0.853332
+    }
+   },
+   "auc1": 0.1930275485879436,
+   "tp_fp_1e-3": [
+    4130,
+    2
+   ],
+   "fp_at_recall": {
+    "0.04": 1,
+    "0.05": 1,
+    "0.06": 1,
+    "0.07": 5,
+    "0.08": 277,
+    "0.1": null
+   }
+  }
+ },
+ "identical_hits": true
+}

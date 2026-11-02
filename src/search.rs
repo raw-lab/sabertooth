@@ -65,25 +65,6 @@ impl Default for WindowParams {
     }
 }
 
-/// Per-worker scratch limits (the CLI derives them from `--memory-limit`).
-/// They bound memory only; results do not depend on them. (The traceback
-/// method switch is a fixed problem-size constant,
-/// [`crate::align::FULL_TRACEBACK_MAX_CELLS`], for the same reason.)
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "distributed", derive(serde::Serialize, serde::Deserialize))]
-pub struct ScratchLimits {
-    /// Posting ranges held by the per-worker variant cache.
-    pub variant_cache_ranges: usize,
-}
-
-impl Default for ScratchLimits {
-    fn default() -> Self {
-        ScratchLimits {
-            variant_cache_ranges: 1 << 19,
-        }
-    }
-}
-
 /// Complete, validated search configuration (shared by CLI, library and the
 /// distributed backend).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -122,8 +103,6 @@ pub struct SearchParams {
     pub profile_calibration_samples: usize,
     /// Seed for per-profile calibration.
     pub calibration_seed: u64,
-    /// Per-worker memory limits.
-    pub scratch: ScratchLimits,
 }
 
 impl SearchParams {
@@ -144,7 +123,6 @@ impl SearchParams {
             exhaustive: false,
             profile_calibration_samples: 2000,
             calibration_seed: 0x5EED,
-            scratch: ScratchLimits::default(),
         }
     }
 
@@ -346,12 +324,6 @@ impl WorkerScratch {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Scratch bounded by `limits`.
-    pub fn with_limits(limits: &ScratchLimits) -> Self {
-        let mut s = WorkerScratch::default();
-        s.prefilter.cache_limit = limits.variant_cache_ranges;
-        s
-    }
     pub fn heap_bytes(&self) -> usize {
         self.prefilter.heap_bytes() + self.align.heap_bytes() + self.mask.capacity()
     }
@@ -381,6 +353,35 @@ pub struct Engine<'a, T: Targets> {
     pub index: Option<&'a SeedIndex>,
     pub params: SearchParams,
     pub stats: Statistics,
+}
+
+/// Diagnostic: with `SABERTOOTH_TRACE_CANDIDATES=<file>` every prefilter
+/// candidate is written as `query, target, prefilter score, DP cells`. A
+/// stricter gate keeps a subset of the candidates and never changes their
+/// gapped scores, so one traced run evaluates every higher gate exactly
+/// (`bench/tune_gate.py`).
+fn candidate_trace() -> Option<&'static std::sync::Mutex<std::io::BufWriter<std::fs::File>>> {
+    static TRACE: std::sync::OnceLock<Option<std::sync::Mutex<std::io::BufWriter<std::fs::File>>>> = std::sync::OnceLock::new();
+    TRACE
+        .get_or_init(|| {
+            let path = std::env::var_os("SABERTOOTH_TRACE_CANDIDATES")?;
+            match std::fs::File::create(&path) {
+                Ok(f) => Some(std::sync::Mutex::new(std::io::BufWriter::with_capacity(1 << 20, f))),
+                Err(e) => {
+                    eprintln!("sabertooth: cannot write candidate trace {}: {}", std::path::Path::new(&path).display(), e);
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+/// Flush the candidate trace (end of a command).
+pub fn flush_candidate_trace() {
+    if let Some(tr) = candidate_trace() {
+        use std::io::Write;
+        let _ = tr.lock().map(|mut w| w.flush());
+    }
 }
 
 struct Pass {
@@ -500,7 +501,9 @@ impl<'a, T: Targets> Engine<'a, T> {
                     ext_rows: align_table.rows(),
                     seed_mask: mask_ref,
                 };
-                prefilter_query(&pq, idx, &p.prefilter, p.gaps, &mut scratch.prefilter, &mut stats.prefilter)
+                let mut pf = p.prefilter;
+                pf.regions = p.window.enabled;
+                prefilter_query(&pq, idx, &pf, p.gaps, &mut scratch.prefilter, &mut stats.prefilter)
             }
             // exhaustive (or no index): every target is a candidate
             _ => (0..self.targets.count())
@@ -516,6 +519,15 @@ impl<'a, T: Targets> Engine<'a, T> {
         };
         stats.candidates += cands.len() as u64;
         stats.ns_prefilter += t_pf.elapsed().as_nanos() as u64;
+        if let Some(tr) = candidate_trace() {
+            let mut buf = String::new();
+            for c in &cands {
+                let n = self.targets.residues_of(c.target_id as usize).len();
+                buf.push_str(&format!("{}\t{}\t{}\t{}\n", qid, self.targets.ident(c.target_id as usize), c.diag_score, m * n));
+            }
+            use std::io::Write;
+            let _ = tr.lock().map(|mut w| w.write_all(buf.as_bytes()));
+        }
 
         // ---- gapped scores -------------------------------------------------
         let t_g = Instant::now();
@@ -659,7 +671,7 @@ impl<'a, T: Targets> Engine<'a, T> {
     /// rayon): used where an outer scheduler (the distributed backend) already
     /// runs one task per CPU slot, so nothing is nested.
     pub fn search_batch_sequential(&self, queries: &SeqDb, first_ordinal: usize, stats: &mut SearchStats) -> Vec<Vec<(Hit, Alignment)>> {
-        let mut scratch = WorkerScratch::with_limits(&self.params.scratch);
+        let mut scratch = WorkerScratch::new();
         (0..queries.len())
             .map(|i| {
                 self.search_query(
@@ -680,7 +692,7 @@ impl<'a, T: Targets> Engine<'a, T> {
     pub fn search_batch(&self, queries: &SeqDb, first_ordinal: usize, stats: &mut SearchStats) -> Vec<Vec<(Hit, Alignment)>> {
         let threads = rayon::current_num_threads().max(1);
         if queries.len() < threads {
-            let mut scratch = WorkerScratch::with_limits(&self.params.scratch);
+            let mut scratch = WorkerScratch::new();
             (0..queries.len())
                 .map(|i| {
                     self.search_query(
@@ -696,7 +708,7 @@ impl<'a, T: Targets> Engine<'a, T> {
         } else {
             let per: Vec<(Vec<(Hit, Alignment)>, SearchStats)> = (0..queries.len())
                 .into_par_iter()
-                .map_init(|| WorkerScratch::with_limits(&self.params.scratch), |scratch, i| {
+                .map_init(WorkerScratch::new, |scratch, i| {
                     let mut st = SearchStats::default();
                     let r = self.search_query(
                         first_ordinal + i,
@@ -821,7 +833,7 @@ pub fn profile_hits(
         Some(s) => s,
         None => &mut local,
     };
-    let mut scratch = WorkerScratch::with_limits(&eng.params.scratch);
+    let mut scratch = WorkerScratch::new();
     eng.search_query(0, query_id, QueryKind::Profile(profile), &mut scratch, st, true)
         .into_iter()
         .map(|(h, _)| h)

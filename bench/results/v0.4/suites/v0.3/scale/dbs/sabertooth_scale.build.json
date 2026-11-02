@@ -1,0 +1,77 @@
+{
+ "tool": "sabertooth",
+ "db": "scale",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.3.0",
+   "makedb",
+   "/home/claude/bench_data/ds_scale/scale_db.fa",
+   "/home/claude/suites/v0.3/scale/dbs/st_scale"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.39915301600001385,
+   "median": 0.39915301600001385,
+   "max": 0.39915301600001385,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 11599872,
+   "median": 11599872,
+   "max": 11599872
+  },
+  "runs": [
+   {
+    "wall_s": 0.39915301600001385,
+    "exit": 0,
+    "peak_rss_bytes": 11599872,
+    "user_s": 0.26083999999999996,
+    "sys_s": 0.052199999999999996,
+    "minor_faults": 1420,
+    "major_faults": 0,
+    "stderr_tail": "makedb: wrote 374323 sequences to /home/claude/suites/v0.3/scale/dbs/st_scale{,.index,.dbtype,_h,_h.index,.lookup,.source} (amino acid)\n  (sequence database only; build the seed index with `sabertooth createindex /home/claude/suites/v0.3/scale/dbs/st_scale`)\n",
+    "rep": 0
+   }
+  ]
+ },
+ "createindex": {
+  "label": "createindex",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.3.0",
+   "createindex",
+   "/home/claude/suites/v0.3/scale/dbs/st_scale",
+   "--threads",
+   "2"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 16.623923381000054,
+   "median": 16.623923381000054,
+   "max": 16.623923381000054,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 1527263232,
+   "median": 1527263232,
+   "max": 1527263232
+  },
+  "runs": [
+   {
+    "wall_s": 16.623923381000054,
+    "exit": 0,
+    "peak_rss_bytes": 1527263232,
+    "user_s": 16.808882,
+    "sys_s": 6.922924,
+    "minor_faults": 431441,
+    "major_faults": 0,
+    "stderr_tail": "createindex: 374323 sequences, 68310060 residues -> /home/claude/suites/v0.3/scale/dbs/st_scale.stidx (64503797 postings, 28585230 distinct 6-mers, 1522659 masked residues, 1 partition(s), 832.6 MiB) in 16.61s; peak RSS 1456.5 MiB\n",
+    "rep": 0
+   }
+  ]
+ },
+ "index_bytes": 873084952,
+ "db_bytes": 966045713
+}

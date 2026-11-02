@@ -514,6 +514,7 @@ fn execution_modes_give_byte_identical_output() {
         (vec!["--hit-block", "1024"], vec![]),
         (vec![], vec![("SABERTOOTH_SIMD", "sse2")]),
         (vec![], vec![("SABERTOOTH_SIMD", "avx2")]),
+        (vec![], vec![("SABERTOOTH_SIMD", "avx512")]),
         (vec![], vec![("SABERTOOTH_SIMD", "scalar")]),
     ];
     for (extra, env) in &variants {
@@ -596,4 +597,124 @@ fn distributed_cli_matches_local_cli() {
         &[],
     );
     assert_eq!(dist, local);
+}
+
+/// Index format 2 (sparse and direct k-mer lookup, bit-packed postings) and
+/// format-1 files written by v0.3 give identical search output; with v0.3's
+/// evidence settings the v0.3 output itself is reproduced.
+#[test]
+fn index_layouts_and_v1_indexes_give_identical_output() {
+    let d = tmpdir("layouts");
+    let fa = d.join("t.fasta");
+    let text = synthetic_fasta(0xC0FFEE, 8, 6);
+    std::fs::write(&fa, &text).unwrap();
+    let q = d.join("q.fasta");
+    std::fs::write(&q, every_nth_record(&text, 3)).unwrap();
+    let db = d.join("tDB");
+    run(&["makedb", fa.to_str().unwrap(), db.to_str().unwrap()]);
+    let mut outs = Vec::new();
+    for layout in ["sparse", "direct", "auto"] {
+        let idx = d.join(format!("t.{}.stidx", layout));
+        let (_, err) = run(&["createindex", db.to_str().unwrap(), idx.to_str().unwrap(), "--index-layout", layout]);
+        if layout != "auto" {
+            assert!(err.contains(&format!("{} lookup", layout)), "{}", err);
+        }
+        let (o, _) = run(&["search", q.to_str().unwrap(), idx.to_str().unwrap(), "--evalue", "10", "--extra-cols"]);
+        outs.push(o);
+    }
+    assert!(outs[0].lines().count() > 30);
+    assert_eq!(outs[0], outs[1], "sparse vs direct");
+    assert_eq!(outs[0], outs[2], "sparse vs auto");
+    // a format-1 index from v0.3 (k = 2, no masking)
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+    let fx = data.join("v1_fixture.fa");
+    let v1 = data.join("v1_fixture_k2.stidx");
+    let v2 = d.join("fixture_k2.stidx");
+    run(&["createindex", fx.to_str().unwrap(), v2.to_str().unwrap(), "--k", "2", "--mask", "0"]);
+    let args = |idx: &Path| -> Vec<String> {
+        ["search", fx.to_str().unwrap(), idx.to_str().unwrap(), "--k", "2", "--mask", "0", "--evalue", "10"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let a1: Vec<String> = args(&v1);
+    let a2: Vec<String> = args(&v2);
+    let r1 = run(&a1.iter().map(|s| s.as_str()).collect::<Vec<_>>()).0;
+    let r2 = run(&a2.iter().map(|s| s.as_str()).collect::<Vec<_>>()).0;
+    assert_eq!(r1, r2, "format 1 vs format 2 index");
+    // v0.3's prefilter settings (k-mer score 22, 512 k-mers per window, a
+    // fixed gate of 33, X-drop 30 evidence) reproduce v0.3's own output
+    let mut a3 = a1.clone();
+    for (k, v) in [("--ungapped-xdrop", "30"), ("--kmer-score", "22"), ("--max-kmers", "512"), ("--min-diag-score", "33")] {
+        a3.extend([k.to_string(), v.to_string()]);
+    }
+    let r3 = run(&a3.iter().map(|s| s.as_str()).collect::<Vec<_>>()).0;
+    let want = std::fs::read_to_string(data.join("v1_fixture_k2.v03.m8")).unwrap();
+    assert_eq!(r3, want, "v0.3 output not reproduced");
+}
+
+/// Misspelled options are errors (v0.3 only warned and ran with defaults).
+#[test]
+fn unknown_options_are_rejected() {
+    let d = tmpdir("unknownopt");
+    let fa = d.join("t.fasta");
+    std::fs::write(&fa, ">a\nMKVLLACDEFGHIKLMNPQRSTVWY\n").unwrap();
+    let f = fa.to_str().unwrap();
+    for args in [
+        vec!["search", f, f, "--evalu", "1e-5"],
+        vec!["easysearch", f, f, "--max-hit", "5"],
+        vec!["createindex", f, "--kmer", "5"],
+        vec!["makedb", f, d.join("db").to_str().unwrap(), "--threadz", "2"],
+        vec!["cluster", f, "--min-seqid", "0.5"],
+    ] {
+        let o = Command::new(bin()).args(&args).output().unwrap();
+        assert!(!o.status.success(), "{:?} should fail", args);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains("unknown option"), "{:?}: {}", args, err);
+    }
+    // known options still work
+    run(&["search", f, f, "--evalue", "1", "--max-hits", "5", "--threads", "1"]);
+}
+
+/// The default seed is the spaced pattern 111001101 (`--k 6` selects the
+/// contiguous 6-mer); a default search adopts a default index; `--spaced`
+/// and `--k` conflict; the ungapped gate follows the database size unless
+/// `--min-diag-score` fixes it.
+#[test]
+fn default_seed_and_size_adjusted_gate() {
+    let d = tmpdir("seeddefault");
+    let fa = d.join("t.fasta");
+    let text = synthetic_fasta(0xBEEF, 6, 5);
+    std::fs::write(&fa, &text).unwrap();
+    let q = d.join("q.fasta");
+    std::fs::write(&q, every_nth_record(&text, 4)).unwrap();
+    let db = d.join("tDB");
+    let (db_s, q_s) = (db.to_str().unwrap(), q.to_str().unwrap());
+    run(&["makedb", fa.to_str().unwrap(), db_s]);
+    run(&["createindex", db_s]);
+    let (info, _) = run(&["indexinfo", d.join("tDB.stidx").to_str().unwrap()]);
+    assert!(info.contains("seed pattern   : 111001101 (k = 6)"), "{}", info);
+    let field = |json: &str, key: &str| -> i64 {
+        let pre = json.find("\"prefilter\"").expect("prefilter object");
+        let at = json[pre..].find(&format!("\"{}\": ", key)).unwrap() + pre + key.len() + 4;
+        json[at..].split([',', '}']).next().unwrap().trim().parse().unwrap()
+    };
+    let residues: f64 = text.lines().filter(|l| !l.starts_with('>')).map(|l| l.trim().len() as f64).sum();
+    let sj = d.join("s.json");
+    let (_, err) = run(&["search", q_s, db_s, "--stats-json", sj.to_str().unwrap()]);
+    assert!(!err.contains("temporary"), "default search did not adopt the default index: {}", err);
+    let j = std::fs::read_to_string(&sj).unwrap();
+    assert!(j.contains("\"seed_pattern\": \"111001101\""), "{}", j);
+    // the -s 5.7 gate, lowered for this small database
+    let want = sabertooth::prefilter::size_adjusted_gate(sabertooth::prefilter::sequence_preset(5.7).2, residues as usize);
+    assert!(want < sabertooth::prefilter::sequence_preset(5.7).2);
+    assert_eq!(field(&j, "min_diag_score"), want as i64);
+    run(&["search", q_s, db_s, "--min-diag-score", "37", "--stats-json", sj.to_str().unwrap()]);
+    assert_eq!(field(&std::fs::read_to_string(&sj).unwrap(), "min_diag_score"), 37);
+    // the contiguous seed is still available, through a temporary index here
+    let (_, err) = run(&["search", q_s, db_s, "--k", "6"]);
+    assert!(err.contains("temporary index"), "{}", err);
+    let o = Command::new(bin()).args(["search", q_s, db_s, "--k", "6", "--spaced", "110011"]).output().unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("mutually exclusive"));
 }

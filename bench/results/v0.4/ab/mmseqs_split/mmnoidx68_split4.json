@@ -1,0 +1,56 @@
+{
+ "label": "mmnoidx68 --split 4",
+ "cmd": [
+  "timeout",
+  "900",
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/series/q_eval1k.fa",
+  "/home/claude/ab_work/mmnoidx68",
+  "/home/claude/ab_work/mm_mmnoidx68_s4.m8",
+  "/home/claude/ab_work/mmtmp_mmnoidx68_s4",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7",
+  "--split",
+  "4"
+ ],
+ "repeat": 1,
+ "warmup_wall_s": [],
+ "wall_s": {
+  "min": 7.3840675010005725,
+  "median": 7.3840675010005725,
+  "max": 7.3840675010005725,
+  "stdev": 0.0
+ },
+ "peak_rss_bytes": {
+  "min": 1070047232,
+  "median": 1070047232,
+  "max": 1070047232
+ },
+ "runs": [
+  {
+   "wall_s": 7.3840675010005725,
+   "exit": 1,
+   "peak_rss_bytes": 1070047232,
+   "user_s": 12.655149,
+   "sys_s": 0.7948959999999999,
+   "minor_faults": 264409,
+   "major_faults": 723,
+   "stderr_tail": "Killed\n",
+   "rep": 0,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 1073741824,
+    "failcnt": 13559
+   }
+  }
+ ]
+}

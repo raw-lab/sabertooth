@@ -1,0 +1,99 @@
+{
+ "binary": {
+  "path": "/home/claude/bin/sabertooth-0.4.0",
+  "sha256": "48c9d9d45bd5a5269d7eb5ec41e164bf07a6d7a0c194d78654b56bdb4a86ecd9",
+  "version": "Sabertooth v0.4.0"
+ },
+ "queries": {
+  "fasta": "/home/claude/bench_data/ds_scale/q_tune.fa",
+  "sha256": "c0f2031d033b2ce9c7f1a55404335d525351bda42db1fe4f259ba846db7a99cf"
+ },
+ "threads": 2,
+ "repeat": 3,
+ "warmup": 1,
+ "host": {
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "cpus": 2,
+  "kernel": "6.18.44-fc-v139",
+  "mem_total_mib": 8029
+ },
+ "runs": [
+  {
+   "name": "2.6M",
+   "layout": "sparse",
+   "index_bytes": 32878872,
+   "wall_s": {
+    "median": 2.020997626000053,
+    "min": 1.911973757999931,
+    "max": 2.1625057240000842
+   },
+   "peak_rss_bytes_median": 55873536,
+   "hits_sha256": "00960294f80c1c87a4a67324718fb20e7a92518f5b5369e8f35bada7550224fe"
+  },
+  {
+   "name": "2.6M",
+   "layout": "auto",
+   "index_bytes": 32878872,
+   "wall_s": {
+    "median": 2.0041069439998864,
+    "min": 1.9738260470001023,
+    "max": 2.0218666790001407
+   },
+   "peak_rss_bytes_median": 55955456,
+   "hits_sha256": "00960294f80c1c87a4a67324718fb20e7a92518f5b5369e8f35bada7550224fe"
+  },
+  {
+   "name": "17M",
+   "layout": "sparse",
+   "index_bytes": 180194584,
+   "wall_s": {
+    "median": 4.724709175000044,
+    "min": 4.720379145000152,
+    "max": 4.830918401999952
+   },
+   "peak_rss_bytes_median": 207331328,
+   "hits_sha256": "cb5db7b8488217118f269fa0367259045702c7b61981dcb6d9575591c8470f4a"
+  },
+  {
+   "name": "17M",
+   "layout": "auto",
+   "index_bytes": 214769108,
+   "wall_s": {
+    "median": 2.4606458999999177,
+    "min": 2.3169109289999597,
+    "max": 2.509512586000028
+   },
+   "peak_rss_bytes_median": 234188800,
+   "hits_sha256": "cb5db7b8488217118f269fa0367259045702c7b61981dcb6d9575591c8470f4a"
+  },
+  {
+   "name": "68M",
+   "layout": "sparse",
+   "index_bytes": 609886104,
+   "wall_s": {
+    "median": 7.374508233000142,
+    "min": 7.328019456999982,
+    "max": 7.485973129000058
+   },
+   "peak_rss_bytes_median": 650510336,
+   "hits_sha256": "a13f4bea49a8bd78a01697156f289227854aa7e5100489d1eb576caebade1b4c"
+  },
+  {
+   "name": "68M",
+   "layout": "auto",
+   "index_bytes": 461769044,
+   "wall_s": {
+    "median": 4.878162499999917,
+    "min": 4.855310260999886,
+    "max": 5.007874655000023
+   },
+   "peak_rss_bytes_median": 495611904,
+   "hits_sha256": "a13f4bea49a8bd78a01697156f289227854aa7e5100489d1eb576caebade1b4c"
+  }
+ ],
+ "identical_hits": {
+  "2.6M": true,
+  "17M": true,
+  "68M": true
+ }
+}

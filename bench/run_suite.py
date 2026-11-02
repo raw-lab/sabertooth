@@ -17,6 +17,8 @@ Suites
            exhaustive Smith-Waterman
   null     E-value calibration on null data (shuffled queries vs the real
            database; real queries vs a shuffled database)
+  presets  every sabertooth -s preset on the tuning queries vs SCOPe40 and vs
+           the 68 M-residue database (--data DS_SCALE)
   scale    68 M-residue database (--data DS_SCALE): presets, 1 vs 2 threads,
            cold cache, seed caps, cgroup-limited machines (1 GiB / 512 MiB /
            256 MiB; out-of-core shards), every tool
@@ -109,6 +111,11 @@ def suite_runs(suite):
                 runs.append((name, tool, a, wl))
         # sensitivity ceiling of the scoring scheme: exhaustive Smith-Waterman
         runs.append(('st_exhaustive', 'sabertooth_exh', [], 'eval'))
+    elif suite == 'presets':
+        # every -s preset on the tuning queries: SCOPe40 and the 68 M database
+        for wl in ('tune', 'scale'):
+            for name, a in ST_PRESETS.items():
+                runs.append((name, 'sabertooth', a, wl))
     elif suite == 'null':
         tools = [
             ('v02_default', 'baseline', []),

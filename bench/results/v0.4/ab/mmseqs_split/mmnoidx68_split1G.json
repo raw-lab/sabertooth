@@ -1,0 +1,56 @@
+{
+ "label": "mmnoidx68 split 1G",
+ "cmd": [
+  "timeout",
+  "1200",
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/series/../series/q_eval1k.fa",
+  "/home/claude/ab_work/mmnoidx68",
+  "/home/claude/ab_work/mm_mmnoidx68_1G.m8",
+  "/home/claude/ab_work/mmtmp_mmnoidx68_1G",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7",
+  "--split-memory-limit",
+  "1G"
+ ],
+ "repeat": 1,
+ "warmup_wall_s": [],
+ "wall_s": {
+  "min": 0.04427798599954258,
+  "median": 0.04427798599954258,
+  "max": 0.04427798599954258,
+  "stdev": 0.0
+ },
+ "peak_rss_bytes": {
+  "min": 19992576,
+  "median": 19992576,
+  "max": 19992576
+ },
+ "runs": [
+  {
+   "wall_s": 0.04427798599954258,
+   "exit": 1,
+   "peak_rss_bytes": 19992576,
+   "user_s": 0.018723999999999998,
+   "sys_s": 0.023586,
+   "minor_faults": 3695,
+   "major_faults": 1,
+   "stderr_tail": "Cannot fit databases into 1015M. Please use a computer with more main memory.\n",
+   "rep": 0,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 18153472,
+    "failcnt": 0
+   }
+  }
+ ]
+}

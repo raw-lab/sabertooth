@@ -1,0 +1,77 @@
+{
+ "tool": "sabertooth",
+ "db": "scope40",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.4.0",
+   "makedb",
+   "/home/claude/bench_data/ds_scale/scope40.fa",
+   "/home/claude/suites/v0.4/presets/dbs/st_scope40"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.41254081799999653,
+   "median": 0.41254081799999653,
+   "max": 0.41254081799999653,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 11608064,
+   "median": 11608064,
+   "max": 11608064
+  },
+  "runs": [
+   {
+    "wall_s": 0.41254081799999653,
+    "exit": 0,
+    "peak_rss_bytes": 11608064,
+    "user_s": 0.010721999999999999,
+    "sys_s": 0.007209999999999999,
+    "minor_faults": 623,
+    "major_faults": 0,
+    "stderr_tail": "makedb: wrote 14323 sequences to /home/claude/suites/v0.4/presets/dbs/st_scope40{,.index,.dbtype,_h,_h.index,.lookup,.source} (amino acid)\n  (sequence database only; build the seed index with `sabertooth createindex /home/claude/suites/v0.4/presets/dbs/st_scope40`)\n",
+    "rep": 0
+   }
+  ]
+ },
+ "createindex": {
+  "label": "createindex",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.4.0",
+   "createindex",
+   "/home/claude/suites/v0.4/presets/dbs/st_scope40",
+   "--threads",
+   "2"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.31511627499999406,
+   "median": 0.31511627499999406,
+   "max": 0.31511627499999406,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 64933888,
+   "median": 64933888,
+   "max": 64933888
+  },
+  "runs": [
+   {
+    "wall_s": 0.31511627499999406,
+    "exit": 0,
+    "peak_rss_bytes": 64933888,
+    "user_s": 0.314058,
+    "sys_s": 0.07479999999999999,
+    "minor_faults": 18406,
+    "major_faults": 0,
+    "stderr_tail": "createindex: 14323 sequences, 2611087 residues -> /home/claude/suites/v0.4/presets/dbs/st_scope40.stidx (2374539 postings of 4 bytes, 2234478 distinct 6-mers, sparse lookup, 85968 masked residues, 1 partition(s), 31.4 MiB) in 312.44ms; peak RSS 61.9 MiB\n",
+    "rep": 0
+   }
+  ]
+ },
+ "index_bytes": 32878872,
+ "db_bytes": 36445053
+}

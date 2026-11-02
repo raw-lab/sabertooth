@@ -1,0 +1,45 @@
+{
+ "tool": "diamond",
+ "db": "scope40",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/tools/diamond",
+   "makedb",
+   "--in",
+   "/home/claude/bench_data/ds_scale/scope40.fa",
+   "-d",
+   "/home/claude/suites/v0.4/null/dbs/dm_scope40",
+   "--threads",
+   "2",
+   "--quiet"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.11306356600107392,
+   "median": 0.11306356600107392,
+   "max": 0.11306356600107392,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 20930560,
+   "median": 20930560,
+   "max": 20930560
+  },
+  "runs": [
+   {
+    "wall_s": 0.11306356600107392,
+    "exit": 0,
+    "peak_rss_bytes": 20930560,
+    "user_s": 0.181924,
+    "sys_s": 0.023368999999999997,
+    "minor_faults": 5370,
+    "major_faults": 0,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "db_bytes": 3114683
+}

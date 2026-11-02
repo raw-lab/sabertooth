@@ -1,0 +1,77 @@
+{
+ "tool": "sabertooth",
+ "db": "decoy",
+ "makedb": {
+  "label": "makedb",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.4.0",
+   "makedb",
+   "/home/claude/bench_data/ds_scale/db_decoy.fa",
+   "/home/claude/suites/v0.4/eval/dbs/st_decoy"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 0.7497568270009651,
+   "median": 0.7497568270009651,
+   "max": 0.7497568270009651,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 11534336,
+   "median": 11534336,
+   "max": 11534336
+  },
+  "runs": [
+   {
+    "wall_s": 0.7497568270009651,
+    "exit": 0,
+    "peak_rss_bytes": 11534336,
+    "user_s": 0.049839999999999995,
+    "sys_s": 0.014939,
+    "minor_faults": 965,
+    "major_faults": 0,
+    "stderr_tail": "makedb: wrote 32646 sequences to /home/claude/suites/v0.4/eval/dbs/st_decoy{,.index,.dbtype,_h,_h.index,.lookup,.source} (amino acid)\n  (sequence database only; build the seed index with `sabertooth createindex /home/claude/suites/v0.4/eval/dbs/st_decoy`)\n",
+    "rep": 0
+   }
+  ]
+ },
+ "createindex": {
+  "label": "createindex",
+  "cmd": [
+   "/home/claude/bin/sabertooth-0.4.0",
+   "createindex",
+   "/home/claude/suites/v0.4/eval/dbs/st_decoy",
+   "--threads",
+   "2"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 1.0759162360009213,
+   "median": 1.0759162360009213,
+   "max": 1.0759162360009213,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 114630656,
+   "median": 114630656,
+   "max": 114630656
+  },
+  "runs": [
+   {
+    "wall_s": 1.0759162360009213,
+    "exit": 0,
+    "peak_rss_bytes": 114630656,
+    "user_s": 1.169147,
+    "sys_s": 0.185227,
+    "minor_faults": 31195,
+    "major_faults": 0,
+    "stderr_tail": "createindex: 32646 sequences, 6262676 residues -> /home/claude/suites/v0.4/eval/dbs/st_decoy.stidx (5216696 postings of 4 bytes, 4675781 distinct 6-mers, sparse lookup, 642454 masked residues, 1 partition(s), 64.8 MiB) in 1.07s; peak RSS 109.3 MiB\n",
+    "rep": 0
+   }
+  ]
+ },
+ "index_bytes": 67990296,
+ "db_bytes": 76601120
+}

@@ -1,0 +1,56 @@
+{
+ "label": "mm68 split 768M",
+ "cmd": [
+  "timeout",
+  "1200",
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/series/../series/q_eval1k.fa",
+  "/home/claude/ab_work/mm68",
+  "/home/claude/ab_work/mm_mm68_768M.m8",
+  "/home/claude/ab_work/mmtmp_mm68_768M",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7",
+  "--split-memory-limit",
+  "768M"
+ ],
+ "repeat": 1,
+ "warmup_wall_s": [],
+ "wall_s": {
+  "min": 0.023288397999749577,
+  "median": 0.023288397999749577,
+  "max": 0.023288397999749577,
+  "stdev": 0.0
+ },
+ "peak_rss_bytes": {
+  "min": 11599872,
+  "median": 11599872,
+  "max": 11599872
+ },
+ "runs": [
+  {
+   "wall_s": 0.023288397999749577,
+   "exit": 1,
+   "peak_rss_bytes": 11599872,
+   "user_s": 0.007744999999999999,
+   "sys_s": 0.014797999999999999,
+   "minor_faults": 1476,
+   "major_faults": 1,
+   "stderr_tail": "Cannot fit databases into 767M. Please use a computer with more main memory.\n",
+   "rep": 0,
+   "cgroup": {
+    "limit_bytes": 1073741824,
+    "max_usage_bytes": 4210688,
+    "failcnt": 0
+   }
+  }
+ ]
+}

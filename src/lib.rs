@@ -44,6 +44,7 @@ pub mod seqio;
 pub mod shard;
 pub mod taxonomy;
 pub mod simd;
+pub mod ungapped;
 
 /// Crate version string (from Cargo).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

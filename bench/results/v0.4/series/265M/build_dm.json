@@ -1,0 +1,50 @@
+{
+ "tool": "dm",
+ "fasta": "/home/claude/bench_data/series/series_265M.fa",
+ "target": "/home/claude/series_out/265M/dbs/dm_db",
+ "steps": {
+  "makedb": {
+   "label": "dm makedb",
+   "cmd": [
+    "/home/claude/tools/diamond",
+    "makedb",
+    "--in",
+    "/home/claude/bench_data/series/series_265M.fa",
+    "-d",
+    "/home/claude/series_out/265M/dbs/dm_db",
+    "--threads",
+    "2",
+    "--quiet"
+   ],
+   "repeat": 1,
+   "warmup_wall_s": [],
+   "wall_s": {
+    "min": 11.792975612999726,
+    "median": 11.792975612999726,
+    "max": 11.792975612999726,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 394219520,
+    "median": 394219520,
+    "max": 394219520
+   },
+   "runs": [
+    {
+     "wall_s": 11.792975612999726,
+     "exit": 0,
+     "peak_rss_bytes": 394219520,
+     "user_s": 19.622097,
+     "sys_s": 1.165362,
+     "minor_faults": 118130,
+     "major_faults": 76,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  }
+ },
+ "bytes": 307302736,
+ "wall_s": 11.792975612999726,
+ "peak_rss_bytes": 394219520
+}

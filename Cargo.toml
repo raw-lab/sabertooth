@@ -1,8 +1,8 @@
 [package]
 name = "sabertooth"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.89"
 authors = ["RAW Lab <github.com/raw-lab>"]
 description = "Sabertooth — a pure-Rust reimplementation of the MMseqs2 profile/PSSM sensitivity core"
 license = "MIT"

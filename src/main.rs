@@ -112,14 +112,27 @@ impl Args {
         }
     }
 
-    /// Warn about options this command does not know (typos).
-    fn warn_unknown(&self, known: &[&str]) {
-        for k in self.options.keys() {
-            if k.starts_with("hydra-") || known.contains(&k.as_str()) || COMMON_OPTS.contains(&k.as_str()) {
-                continue;
-            }
-            eprintln!("sabertooth: warning: option --{} is not used by this command", k);
+    /// Reject options this command does not know: a misspelled option (say
+    /// `--evalu 1e-5`) must not silently run with the default (v0.3 only
+    /// warned).
+    fn check_known(&self, cmd: &str, known: &[&str]) -> Result<(), String> {
+        let mut bad: Vec<&str> = self
+            .options
+            .keys()
+            .map(|k| k.as_str())
+            .filter(|k| !(k.starts_with("hydra-") || known.contains(k) || COMMON_OPTS.contains(k)))
+            .collect();
+        if bad.is_empty() {
+            return Ok(());
         }
+        bad.sort_unstable();
+        Err(format!(
+            "unknown option{} for `{}`: {} (see `sabertooth {} --help`)",
+            if bad.len() > 1 { "s" } else { "" },
+            cmd,
+            bad.iter().map(|k| format!("--{}", k)).collect::<Vec<_>>().join(", "),
+            cmd
+        ))
     }
 }
 
@@ -176,6 +189,7 @@ fn main() -> ExitCode {
         }
     };
 
+    sabertooth::search::flush_candidate_trace();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -209,7 +223,6 @@ struct Plan {
     budget: Option<usize>,
     threads: usize,
     hit_block: usize,
-    cache_limit: usize,
     tb_cells: usize,
     batch_seqs: usize,
     batch_residues: usize,
@@ -220,12 +233,13 @@ struct Plan {
 
 const FIXED_OVERHEAD: usize = 24 << 20;
 
-/// Per-worker scratch estimate: target-block hit buffer (16 B/hit), variant
-/// cache (16 B per cached posting range + map), traceback matrix (1 B/cell)
-/// and fixed buffers. Seeds of the query being processed (24 B per seed with
-/// postings) come on top and scale with query length × `--max-kmers`.
-fn per_worker_bytes(hit_block: usize, cache_limit: usize, tb_cells: usize) -> usize {
-    hit_block * 16 + cache_limit * 24 + tb_cells + (2 << 20)
+/// Per-worker scratch estimate: target-block hit buffer and its radix-sort
+/// copy (16 B/hit), segment-evidence chunk and SIMD buffers (~1 MiB),
+/// traceback matrix (1 B/cell) and fixed buffers. Seeds of the query being
+/// processed (24 B per seed with postings) come on top and scale with query
+/// length × `--max-kmers`.
+fn per_worker_bytes(hit_block: usize, tb_cells: usize) -> usize {
+    hit_block * 16 + tb_cells + (3 << 20)
 }
 
 fn plan_threads(args: &Args) -> Result<usize, String> {
@@ -237,7 +251,6 @@ fn make_plan(args: &Args, sp: &mut SearchParams) -> Result<Plan, String> {
     let requested = args.opt_usize("threads", cpus())?.max(1);
     let budget = args.opt_bytes("memory-limit")?;
     let mut hit_block = sp.prefilter.hit_block;
-    let mut cache_limit = 1usize << 19;
     let tb_cells = sabertooth::align::FULL_TRACEBACK_MAX_CELLS;
     let mut batch_seqs = args.opt_usize("query-batch", 1024)?.max(1);
     let mut batch_residues = 1usize << 26;
@@ -260,11 +273,10 @@ fn make_plan(args: &Args, sp: &mut SearchParams) -> Result<Plan, String> {
         let avail = b.saturating_sub(FIXED_OVERHEAD + batch_bytes);
         // shrink per-worker scratch until at least one worker fits (the
         // traceback matrix limit is fixed so alignments never depend on it)
-        while per_worker_bytes(hit_block, cache_limit, tb_cells) > avail && (hit_block > 1 << 14 || cache_limit > 1 << 14) {
+        while per_worker_bytes(hit_block, tb_cells) > avail && hit_block > 1 << 14 {
             hit_block = (hit_block / 2).max(1 << 14);
-            cache_limit = (cache_limit / 2).max(1 << 14);
         }
-        let pw = per_worker_bytes(hit_block, cache_limit, tb_cells);
+        let pw = per_worker_bytes(hit_block, tb_cells);
         let fit = (avail / pw).max(1);
         if fit < threads {
             notes.push(format!("memory limit allows {} worker(s) of {} requested", fit, threads));
@@ -273,17 +285,15 @@ fn make_plan(args: &Args, sp: &mut SearchParams) -> Result<Plan, String> {
         build_budget = (b / 2).max(16 << 20);
     }
     sp.prefilter.hit_block = hit_block;
-    sp.scratch.variant_cache_ranges = cache_limit;
     Ok(Plan {
         budget,
         threads,
         hit_block,
-        cache_limit,
         tb_cells,
         batch_seqs,
         batch_residues,
         build_budget,
-        per_worker: per_worker_bytes(hit_block, cache_limit, tb_cells),
+        per_worker: per_worker_bytes(hit_block, tb_cells),
         notes,
     })
 }
@@ -293,7 +303,6 @@ fn plan_json(p: &Plan) -> Json {
         .raw("budget_bytes", &p.budget.map(|b| b.to_string()).unwrap_or_else(|| "null".into()))
         .num("threads", p.threads)
         .num("hit_block", p.hit_block)
-        .num("variant_cache_ranges", p.cache_limit)
         .num("full_traceback_cells", p.tb_cells)
         .num("per_worker_scratch_estimate_bytes", p.per_worker)
         .num("query_batch_seqs", p.batch_seqs)
@@ -361,7 +370,12 @@ DATABASES (two separate steps):
                                          (<db>, .index, .dbtype, _h, ...; readable by mmseqs)
   createindex <db|fasta> [out.stidx]     Seed index: build a persistent, memory-mapped
                                          k-mer index (default <db>.stidx). Searches use it
-                                         automatically when it is present and up to date.
+                                         automatically when it is present, up to date and
+                                         built with the search's seed (default 111001101;
+                                         --k / --spaced / --mask as for search;
+                                         --index-layout auto|sparse|direct, default auto:
+                                         direct k-mer table once the sparse one would
+                                         exceed 64 MiB)
   indexinfo <file.stidx> [--verify]      Show index metadata; --verify checks all checksums
   convert2fasta <db> [out.fasta]         Read a database (or FASTA) back to FASTA
   createdb <in> <out.fasta>              Validate + normalise sequences to FASTA
@@ -403,17 +417,25 @@ SEARCH OPTIONS:
   --min-cov, --min-qcov <f>  Min fraction of the query in the alignment (default 0)
   --min-tcov <f>          Min fraction of the target in the alignment (default 0)
   -s <float>              Sensitivity preset 1..9 (default 5.7). Sequence search: sets
-                          --kmer-score/--max-kmers/--min-diag-score together
-                          (1: 26/192/30, 2: 25/256/30, 4: 24/320/30, 5.7: 22/512/33,
-                          6.5: 21/640/33, 7.5: 19/1024/34, 8.5: 17/1536/36, 9: 16/2048/38;
-                          interpolated between). Explicit options below override it
-  --k <int>               K-mer length (default: seq 6, profile 5)
-  --spaced <mask>         Spaced seed mask, e.g. 110101 (must start/end with 1)
+                          --kmer-score/--max-kmers together (1: 32/64, 2: 30/128,
+                          3: 28/128, 4: 26/256, 5: 24/256, 5.7: 22/512, 6.5: 20/512,
+                          7.5: 18/1024, 8.5: 18/2048, 9: 16/4096; interpolated between).
+                          Explicit options below override it
+  --spaced <mask>         Seed pattern, e.g. 110101 (must start/end with 1). Default for
+                          sequence search and createindex: 111001101 (weight 6, span 9)
+  --k <int>               Contiguous k-mer seed instead (profile search default: 5;
+                          `--k 6` = the seed of v0.3 and its indexes)
   --kmer-score <int>      Similar-k-mer score threshold (seq 22, profile 40)
   --max-kmers <int>       Similar k-mers per window: the exact top-N (default 512)
-  --min-diag-score <int>  Ungapped prefilter gate, raw score (seq 33, profile 30)
-  --ungapped-xdrop <int>  X-drop of the ungapped seed extension (default 30;
-                          0 = best segment anywhere on the diagonal)
+  --min-diag-score <int>  Ungapped prefilter gate, raw score. Default (sequence search):
+                          42 for a 10^8-residue database, 2.5 lower per e-fold below and
+                          1.0 higher per e-fold above (33 at 2.6 M, 38 at 17 M, 41 at
+                          68 M, 43 at 265 M residues); profile search 30
+  --ungapped-xdrop <int>  Ungapped evidence. 0 (default): best segment within
+                          --diag-window of a diagonal's seed hits, scored in SIMD
+                          batches; x > 0: v0.3's X-drop extension (drop-off x)
+  --diag-window <int>     Residues beyond the seed hits searched for that segment
+                          (default 48; 0 = the whole diagonal)
   --min-hits <int>        Min seed hits per target (default 1)
   --diag-hits <int>       Min seed hits on one diagonal (default 1; 2 = double hit)
   --prefilter-diags <int> Diagonals per target scored/chained (default 4)
@@ -534,7 +556,7 @@ fn run_doctor() -> Result<(), String> {
     ok &= check_align;
     let t = sabertooth::alphabet::build_aa2num();
     let db = SeqDb::from_reader(std::io::Cursor::new(">t\nGGGMKVLLACDEFGHIKGGG\n"), &t).map_err(|e| e.to_string())?;
-    let check_index = match SeedIndex::build_transient(&db, &BuildOptions::new(SeedPattern::contiguous(6))) {
+    let check_index = match SeedIndex::build_transient(&db, &BuildOptions::new(SeedPattern::sequence_default())) {
         Ok((idx, _)) => idx.distinct_kmers() > 0,
         Err(_) => false,
     };
@@ -678,7 +700,7 @@ fn pc_params(args: &Args) -> Result<PseudoCountParams, String> {
 const SEARCH_OPTS: &[&str] = &[
     "evalue", "max-hits", "min-cov", "min-qcov", "min-tcov", "k", "spaced", "kmer-score", "sensitivity",
     "max-kmers", "min-diag-score", "min-hits", "diag-hits", "prefilter-diags", "max-candidates",
-    "max-seed-occ", "exact-seeds", "hit-block", "ungapped-xdrop", "mask", "comp-bias-corr", "band", "window",
+    "max-seed-occ", "exact-seeds", "hit-block", "ungapped-xdrop", "diag-window", "mask", "comp-bias-corr", "band", "window",
     "window-min-len", "window-margin", "query-batch", "require-index", "extra-cols", "mask-query", "mask-scoring", "mask-scoring-params",
     "comp-bias-mode",
     "distributed", "shards", "gpus", "shard-dir",
@@ -687,19 +709,32 @@ const SEARCH_OPTS: &[&str] = &[
     "hydra-quiet",
 ];
 
-/// Requested seed pattern (from --spaced or --k).
-fn requested_pattern(args: &Args, default_k: usize) -> Result<SeedPattern, String> {
+/// Requested seed pattern: `--spaced` mask, else contiguous `--k`, else the
+/// command's default pattern.
+fn requested_pattern(args: &Args, default: &SeedPattern) -> Result<SeedPattern, String> {
+    if args.opt_str("spaced").is_some_and(|m| !m.is_empty()) && args.has("k") {
+        return Err("--spaced and --k are mutually exclusive (the mask sets the seed weight)".into());
+    }
     match args.opt_str("spaced").filter(|m| !m.is_empty()) {
         Some(mask) => {
             let p = SeedPattern::from_mask(mask)?;
             check_k(p.weight())?;
             Ok(p)
         }
-        None => {
-            let k = args.opt_usize("k", default_k)?;
+        None if args.has("k") => {
+            let k = args.opt_usize("k", default.weight())?;
             check_k(k)?;
             Ok(SeedPattern::contiguous(k))
         }
+        None => Ok(default.clone()),
+    }
+}
+
+/// Scale the ungapped gate with the size of the searched database (unless
+/// `--min-diag-score` fixes it): see [`sabertooth::prefilter::size_adjusted_gate`].
+fn apply_db_size_gate(args: &Args, sp: &mut SearchParams, db_residues: usize) {
+    if !args.has("min-diag-score") {
+        sp.prefilter.min_diag_score = sabertooth::prefilter::size_adjusted_gate(sp.prefilter.min_diag_score, db_residues);
     }
 }
 
@@ -743,7 +778,8 @@ fn search_params(args: &Args, profile_mode: bool) -> Result<SearchParams, String
         }
     }
     pf.kmer_score = args.opt_i32("kmer-score", pf.kmer_score)?;
-    pf.k = requested_pattern(args, pf.k)?.weight();
+    let default_seed = if profile_mode { SeedPattern::profile_default() } else { SeedPattern::sequence_default() };
+    pf.k = requested_pattern(args, &default_seed)?.weight();
     pf.max_kmers_per_pos = args.opt_usize("max-kmers", pf.max_kmers_per_pos)?;
     pf.min_hits = args.opt_usize("min-hits", pf.min_hits)?;
     pf.min_diag_score = args.opt_i32("min-diag-score", pf.min_diag_score)?;
@@ -757,6 +793,7 @@ fn search_params(args: &Args, profile_mode: bool) -> Result<SearchParams, String
     if pf.xdrop < 0 {
         return Err("--ungapped-xdrop must be >= 0 (0 = whole-diagonal scoring)".into());
     }
+    pf.diag_window = args.opt_usize("diag-window", pf.diag_window)?;
     let mask = args.opt_bool("mask", true)?;
     pf.mask = if mask { Some(MaskParams::default()) } else { None };
     sp.max_evalue = args.opt_f64("evalue", sp.max_evalue)?;
@@ -824,9 +861,9 @@ fn tmp_dir(args: &Args) -> std::path::PathBuf {
 /// defaults or the explicit `--k` / `--spaced` / `--mask`): an index built
 /// with different settings is not adopted (a temporary index is built and a
 /// warning says why), so results never depend on which indexes exist.
-fn resolve_target(path: &str, args: &Args, sp: &mut SearchParams, plan: &Plan, default_k: usize, quiet: bool) -> Result<TargetHandle, String> {
+fn resolve_target(path: &str, args: &Args, sp: &mut SearchParams, plan: &Plan, default_seed: &SeedPattern, quiet: bool) -> Result<TargetHandle, String> {
     let t0 = Instant::now();
-    let want_pattern = requested_pattern(args, default_k)?;
+    let want_pattern = requested_pattern(args, default_seed)?;
     let want_mask = sp.prefilter.mask;
     let mut opts = BuildOptions::new(want_pattern.clone());
     opts.mask = want_mask;
@@ -947,6 +984,9 @@ fn build_stats_json(b: &BuildStats) -> Json {
         .num("partitions", b.partitions)
         .num("partition_buffer_bytes", b.partition_buffer_bytes)
         .num("bucket_table_bytes", b.bucket_table_bytes)
+        .str("layout", b.layout)
+        .num("posting_width_bytes", b.posting_width)
+        .num("lookup_bytes", b.lookup_bytes)
         .num("file_bytes", b.file_bytes)
         .float("seconds_sequences", b.seconds_sequences)
         .float("seconds_count", b.seconds_count)
@@ -983,8 +1023,6 @@ fn stats_json(st: &SearchStats) -> Json {
         .num("kmers_generated", p.kmers_generated)
         .num("windows_at_kmer_cap", p.windows_at_cap)
         .num("exact_seeds_added", p.exact_seeds_added)
-        .num("variant_cache_hits", p.cache_hits)
-        .num("variant_cache_misses", p.cache_misses)
         .num("index_lookups", p.lookups)
         .num("index_prefix_probes", p.prefix_probes)
         .num("presence_bitmap_rejects", p.presence_rejects)
@@ -1036,6 +1074,19 @@ struct Report<'a> {
     wall_total: f64,
     /// Out-of-core / distributed shards used (None: the whole index at once).
     shards: Option<&'a sabertooth::shard::ShardSet>,
+    /// Effective prefilter settings (None: no prefilter, e.g. easysearch).
+    prefilter: Option<sabertooth::prefilter::PrefilterParams>,
+}
+
+fn prefilter_json(p: &sabertooth::prefilter::PrefilterParams) -> Json {
+    Json::new()
+        .num("k", p.k)
+        .num("kmer_score", p.kmer_score)
+        .num("max_kmers_per_window", p.max_kmers_per_pos)
+        .num("min_diag_score", p.min_diag_score)
+        .num("ungapped_xdrop", p.xdrop)
+        .num("diag_window", p.diag_window)
+        .num("max_diagonals", p.max_diagonals)
 }
 
 fn shards_json(set: &sabertooth::shard::ShardSet) -> Json {
@@ -1076,6 +1127,15 @@ fn emit_report(args: &Args, r: &Report) -> Result<(), String> {
                 set.dir.display(),
                 if set.reused { "reused" } else { "built" },
                 set.seconds
+            );
+        }
+        if let Some(pf) = &r.prefilter {
+            eprintln!(
+                "  prefilter: k-mer score {}  max k-mers/window {}  ungapped gate {}  evidence {}",
+                pf.kmer_score,
+                pf.max_kmers_per_pos,
+                pf.min_diag_score,
+                if pf.xdrop > 0 { format!("X-drop {}", pf.xdrop) } else if pf.diag_window > 0 { format!("segment within {} of seeds", pf.diag_window) } else { "whole diagonal".to_string() }
             );
         }
         eprintln!("  statistics: {}", r.ev_model);
@@ -1158,6 +1218,9 @@ fn emit_report(args: &Args, r: &Report) -> Result<(), String> {
         if let Some(set) = r.shards {
             j = j.obj("shards", shards_json(set));
         }
+        if let Some(pf) = &r.prefilter {
+            j = j.obj("prefilter", prefilter_json(pf));
+        }
         std::fs::write(path, j.finish() + "\n").map_err(|e| format!("cannot write --stats-json '{}': {}", path, e))?;
     }
     Ok(())
@@ -1171,7 +1234,7 @@ fn run_search(args: &Args) -> Result<(), String> {
     if args.positionals.len() < 2 {
         return Err("usage: sabertooth search <query> <target> [options]".into());
     }
-    args.warn_unknown(SEARCH_OPTS);
+    args.check_known("search", SEARCH_OPTS)?;
     let m = SubstitutionMatrix::blosum62();
     let mut sp = search_params(args, false)?;
 
@@ -1186,7 +1249,8 @@ fn run_search(args: &Args) -> Result<(), String> {
 
     let plan = make_plan(args, &mut sp)?;
     let t_total = Instant::now();
-    let target = resolve_target(&args.positionals[1], args, &mut sp, &plan, 6, false)?;
+    let target = resolve_target(&args.positionals[1], args, &mut sp, &plan, &SeedPattern::sequence_default(), false)?;
+    apply_db_size_gate(args, &mut sp, target.index.total_residues());
     let ev = EValueParams::sequence(sp.gaps, sp.comp_bias_corr, target.index.total_residues(), target.index.len())?;
     let nshards = local_shard_count(args, &plan, &target)?;
     if nshards > 1 {
@@ -1247,6 +1311,7 @@ fn run_search(args: &Args) -> Result<(), String> {
             wall_output,
             wall_total: t_total.elapsed().as_secs_f64(),
             shards: None,
+            prefilter: Some(sp.prefilter),
         },
     )
 }
@@ -1356,6 +1421,7 @@ fn run_search_sharded(
             wall_output,
             wall_total: t_total.elapsed().as_secs_f64(),
             shards: Some(&set),
+            prefilter: Some(sp.prefilter),
         },
     )
 }
@@ -1369,7 +1435,8 @@ fn run_search_distributed(args: &Args, m: &SubstitutionMatrix, mut sp: SearchPar
     let t_total = Instant::now();
     // the same target resolution (persistent or temporary index) and the same
     // validated parameters as a local search
-    let target = resolve_target(&args.positionals[1], args, &mut sp, &plan, 6, false)?;
+    let target = resolve_target(&args.positionals[1], args, &mut sp, &plan, &SeedPattern::sequence_default(), false)?;
+    apply_db_size_gate(args, &mut sp, target.index.total_residues());
     let set = shard_set_for(args, &plan, &target, shards)?;
     eprintln!(
         "distributed: {} residue-balanced shard(s) in {} ({} in {:.2}s)",
@@ -1448,6 +1515,7 @@ fn run_search_distributed(args: &Args, m: &SubstitutionMatrix, mut sp: SearchPar
             wall_output,
             wall_total: t_total.elapsed().as_secs_f64(),
             shards: Some(&set),
+            prefilter: Some(sp.prefilter),
         },
     )
 }
@@ -1458,7 +1526,7 @@ fn run_profilesearch(args: &Args) -> Result<(), String> {
     }
     let mut known = SEARCH_OPTS.to_vec();
     known.extend_from_slice(&["pca", "pcb", "bias", "num-iterations", "inclusion-evalue", "profile-calibration-samples", "calibration-seed"]);
-    args.warn_unknown(&known);
+    args.check_known("profilesearch", &known)?;
     let m = SubstitutionMatrix::blosum62();
     let msa_data = read_to_string(&args.positionals[0]).map_err(|e| e.to_string())?;
     let pc = pc_params(args)?;
@@ -1471,7 +1539,7 @@ fn run_profilesearch(args: &Args) -> Result<(), String> {
     let mut sp = search_params(args, true)?;
     let plan = make_plan(args, &mut sp)?;
     let t_total = Instant::now();
-    let target = resolve_target(&args.positionals[1], args, &mut sp, &plan, 5, false)?;
+    let target = resolve_target(&args.positionals[1], args, &mut sp, &plan, &SeedPattern::profile_default(), false)?;
     let db_size = (target.index.total_residues(), target.index.len());
     let num_iter = args.opt_usize("num-iterations", 1)?;
     let mut stats = SearchStats::default();
@@ -1511,6 +1579,7 @@ fn run_profilesearch(args: &Args) -> Result<(), String> {
             wall_output: 0.0,
             wall_total: t_total.elapsed().as_secs_f64(),
             shards: None,
+            prefilter: Some(sp.prefilter),
         },
     )
 }
@@ -1519,7 +1588,7 @@ fn run_easysearch(args: &Args) -> Result<(), String> {
     if args.positionals.len() < 2 {
         return Err("usage: sabertooth easysearch <query> <target> [options]".into());
     }
-    args.warn_unknown(SEARCH_OPTS);
+    args.check_known("easysearch", SEARCH_OPTS)?;
     let m = SubstitutionMatrix::blosum62();
     let mut sp = search_params(args, false)?;
     sp.exhaustive = true;
@@ -1575,6 +1644,7 @@ fn run_easysearch(args: &Args) -> Result<(), String> {
             wall_output: 0.0,
             wall_total: t_total.elapsed().as_secs_f64(),
             shards: None,
+            prefilter: None,
         },
     )
 }
@@ -1584,6 +1654,7 @@ fn run_easysearch(args: &Args) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn run_createdb(args: &Args) -> Result<(), String> {
+    args.check_known("createdb", &[])?;
     if args.positionals.len() < 2 {
         return Err("usage: sabertooth createdb <in> <out.fasta>".into());
     }
@@ -1599,6 +1670,7 @@ fn run_createdb(args: &Args) -> Result<(), String> {
 }
 
 fn run_msa2profile(args: &Args) -> Result<(), String> {
+    args.check_known("msa2profile", &["pca", "pcb", "bias"])?;
     if args.positionals.is_empty() {
         return Err("usage: sabertooth msa2profile <msa> [--out file]".into());
     }
@@ -1612,6 +1684,7 @@ fn run_msa2profile(args: &Args) -> Result<(), String> {
 }
 
 fn run_align(args: &Args) -> Result<(), String> {
+    args.check_known("align", &[])?;
     if args.positionals.len() < 2 {
         return Err("usage: sabertooth align <query> <target>".into());
     }
@@ -1659,7 +1732,8 @@ fn run_align(args: &Args) -> Result<(), String> {
 fn engine_search(args: &Args, query: &SeqDb, target_path: &str, sp: &mut SearchParams) -> Result<(Vec<Vec<(Hit, sabertooth::align::Alignment)>>, TargetHandle), String> {
     let m = SubstitutionMatrix::blosum62();
     let plan = make_plan(args, sp)?;
-    let target = resolve_target(target_path, args, sp, &plan, 6, false)?;
+    let target = resolve_target(target_path, args, sp, &plan, &SeedPattern::sequence_default(), false)?;
+    apply_db_size_gate(args, sp, target.index.total_residues());
     let ev = EValueParams::sequence(sp.gaps, sp.comp_bias_corr, target.index.total_residues(), target.index.len())?;
     let eng = Engine {
         mat: &m,
@@ -1686,7 +1760,7 @@ fn run_result2msa(args: &Args) -> Result<(), String> {
     if args.positionals.len() < 2 {
         return Err("usage: sabertooth result2msa <query> <target> [options]".into());
     }
-    args.warn_unknown(SEARCH_OPTS);
+    args.check_known("result2msa", SEARCH_OPTS)?;
     let query = load_seqs(&args.positionals[0], LoadOptions::SEARCH, SeqKind::Protein, "query")?;
     let mut sp = search_params(args, false)?;
     // the MSA is built from the plain-matrix alignment of each hit
@@ -1718,7 +1792,7 @@ fn run_translatesearch(args: &Args) -> Result<(), String> {
     }
     let mut known = SEARCH_OPTS.to_vec();
     known.push("min-orf");
-    args.warn_unknown(&known);
+    args.check_known("translatesearch", &known)?;
     let m = SubstitutionMatrix::blosum62();
     let nt_query = load_seqs(&args.positionals[0], LoadOptions::LETTERS, SeqKind::Nucleotide, "nucleotide query")?;
     if !seqio::looks_nucleotide_db(&nt_query) {
@@ -1756,6 +1830,7 @@ fn run_translatesearch(args: &Args) -> Result<(), String> {
 }
 
 fn run_profileprofile(args: &Args) -> Result<(), String> {
+    args.check_known("profileprofile", &["pca", "pcb", "bias"])?;
     if args.positionals.len() < 2 {
         return Err("usage: sabertooth profileprofile <query.msa> <target.msa> [more_target.msa ...]".into());
     }
@@ -1815,7 +1890,7 @@ fn run_taxonomy(args: &Args) -> Result<(), String> {
     }
     let mut known = SEARCH_OPTS.to_vec();
     known.extend_from_slice(&["nodes", "names", "seqmap", "lca-frac"]);
-    args.warn_unknown(&known);
+    args.check_known("taxonomy", &known)?;
     let nodes_path = args.opt_str("nodes").ok_or("taxonomy requires --nodes <nodes.dmp>")?;
     let seqmap_path = args.opt_str("seqmap").ok_or("taxonomy requires --seqmap <seqid2taxid.tsv>")?;
     let query = load_seqs(&args.positionals[0], LoadOptions::SEARCH, SeqKind::Protein, "query")?;
@@ -1872,6 +1947,7 @@ fn run_taxonomy(args: &Args) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn run_makedb(args: &Args) -> Result<(), String> {
+    args.check_known("makedb", &[])?;
     if args.positionals.len() < 2 {
         return Err("usage: sabertooth makedb <in.fasta[.gz]|db_prefix> <db_prefix>".into());
     }
@@ -1919,19 +1995,25 @@ fn run_makedb(args: &Args) -> Result<(), String> {
 
 fn run_createindex(args: &Args) -> Result<(), String> {
     if args.positionals.is_empty() {
-        return Err("usage: sabertooth createindex <db_prefix|fasta> [out.stidx] [--k 6|--spaced mask] [--mask 0|1] [--memory-limit size]".into());
+        return Err("usage: sabertooth createindex <db_prefix|fasta> [out.stidx] [--spaced mask (default 111001101) | --k n] [--mask 0|1] [--index-layout auto|sparse|direct] [--memory-limit size]".into());
     }
-    args.warn_unknown(&["k", "spaced", "mask", "profile"]);
+    args.check_known("createindex", &["k", "spaced", "mask", "profile", "index-layout"])?;
     let input = &args.positionals[0];
     let out = args
         .positionals
         .get(1)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| index::default_index_path(input));
-    let default_k = if args.has("profile") { 5 } else { 6 };
-    let pattern = requested_pattern(args, default_k)?;
+    let default_seed = if args.has("profile") { SeedPattern::profile_default() } else { SeedPattern::sequence_default() };
+    let pattern = requested_pattern(args, &default_seed)?;
     let mut opts = BuildOptions::new(pattern);
     opts.mask = if args.opt_bool("mask", true)? { Some(MaskParams::default()) } else { None };
+    opts.layout = match args.opt_str("index-layout").unwrap_or("auto") {
+        "auto" => index::LayoutChoice::Auto,
+        "sparse" => index::LayoutChoice::Sparse,
+        "direct" => index::LayoutChoice::Direct,
+        other => return Err(format!("--index-layout must be auto, sparse or direct (got '{}')", other)),
+    };
     opts.memory_budget = match args.opt_bytes("memory-limit")? {
         Some(b) => (b / 2).max(16 << 20),
         None => 1 << 30,
@@ -1950,13 +2032,15 @@ fn run_createindex(args: &Args) -> Result<(), String> {
     let st = index::build_index(src.as_mut(), fp, &out, &opts).map_err(|e| format!("index build failed: {}", e))?;
     let ps = proc_stats();
     eprintln!(
-        "createindex: {} sequences, {} residues -> {} ({} postings, {} distinct {}-mers, {} masked residues, {} partition(s), {:.1} MiB) in {:.2?}; peak RSS {:.1} MiB",
+        "createindex: {} sequences, {} residues -> {} ({} postings of {} bytes, {} distinct {}-mers, {} lookup, {} masked residues, {} partition(s), {:.1} MiB) in {:.2?}; peak RSS {:.1} MiB",
         st.num_seqs,
         st.total_residues,
         out.display(),
         st.num_postings,
+        st.posting_width,
         st.num_kmers,
         opts.pattern.weight(),
+        st.layout,
         st.masked_residues,
         st.partitions,
         st.file_bytes as f64 / 1048576.0,
@@ -1987,6 +2071,7 @@ fn run_createindex(args: &Args) -> Result<(), String> {
 }
 
 fn run_indexinfo(args: &Args) -> Result<(), String> {
+    args.check_known("indexinfo", &["verify"])?;
     if args.positionals.is_empty() {
         return Err("usage: sabertooth indexinfo <file.stidx> [--verify]".into());
     }
@@ -2001,8 +2086,19 @@ fn run_indexinfo(args: &Args) -> Result<(), String> {
     println!("sequences      : {}", m.num_seqs);
     println!("residues       : {} ({} masked for seeding)", m.total_residues, m.masked_residues);
     println!("longest        : {}", m.max_seq_len);
-    println!("postings       : {}", m.num_postings);
+    println!("postings       : {} ({} bytes each)", m.num_postings, m.posting_width);
     println!("distinct k-mers: {}", m.num_kmers);
+    println!(
+        "k-mer lookup   : {}",
+        match m.layout {
+            index::IndexLayout::Sparse => "sparse (bucket tables + one entry per distinct k-mer)".to_string(),
+            index::IndexLayout::Direct if m.offset_width == 2 => format!(
+                "direct (16-bit offsets per possible k-mer in groups of {}, with group bases)",
+                index::OFFSET_GROUP
+            ),
+            index::IndexLayout::Direct => format!("direct (one {}-byte offset per possible k-mer)", m.offset_width),
+        }
+    );
     println!("file size      : {:.1} MiB", idx.mapped_bytes() as f64 / 1048576.0);
     println!(
         "source         : {} ({})",
@@ -2028,6 +2124,7 @@ fn run_indexinfo(args: &Args) -> Result<(), String> {
 }
 
 fn run_convert2fasta(args: &Args) -> Result<(), String> {
+    args.check_known("convert2fasta", &[])?;
     if args.positionals.is_empty() {
         return Err("usage: sabertooth convert2fasta <db_prefix> [out.fasta]".into());
     }
@@ -2055,6 +2152,7 @@ fn run_convert2fasta(args: &Args) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn run_cluster(args: &Args) -> Result<(), String> {
+    args.check_known("cluster", &["k", "min-count", "min-cov", "min-seq-id"])?;
     if args.positionals.is_empty() {
         return Err("usage: sabertooth cluster <in> [--min-seq-id f] [--min-cov f] [--k n]".into());
     }
@@ -2099,6 +2197,7 @@ fn run_cluster(args: &Args) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn run_calibrate(args: &Args) -> Result<(), String> {
+    args.check_known("calibrate", &["comp-bias-corr", "gap-extend", "gap-open", "json", "legacy", "lengths", "samples", "seed", "table", "length", "pairs"])?;
     let m = SubstitutionMatrix::blosum62();
     if args.has("legacy") {
         return run_calibrate_legacy(args, &m);

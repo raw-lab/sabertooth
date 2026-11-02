@@ -369,7 +369,7 @@ pub(crate) mod tests {
             let f = &fam[i % fam.len()];
             let mut s = mutate(&mut rng, f, 20 + (i % 50));
             if i % 9 == 0 {
-                s.extend(std::iter::repeat(b'Q').take(30));
+                s.extend(std::iter::repeat_n(b'Q', 30));
             }
             let pre: Vec<u8> = (0..rng.below(80)).map(|_| aa[rng.below(20)]).collect();
             t.push_str(&format!(">t{} family {}\n{}{}\n", i, i % fam.len(), String::from_utf8(pre).unwrap(), String::from_utf8(s).unwrap()));

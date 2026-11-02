@@ -38,9 +38,11 @@ const NPROF: usize = crate::alphabet::ALPHABET_SIZE; // 21 columns incl. X
 /// Which kernel produced a score (for counters / tests).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kernel {
+    Avx512I16,
     Avx2I16,
     Sse2I16,
     /// `u8` first pass (exact below its headroom; reported when it decided).
+    Avx512U8,
     Avx2U8,
     Sse2U8,
     Scalar,
@@ -55,8 +57,9 @@ fn u8_enabled() -> bool {
 /// Kernel family to build query profiles for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KernelChoice {
-    /// AVX2 if the CPU supports it, else SSE2 (default).
+    /// AVX2, else SSE2 (default; AVX-512BW only when requested).
     Auto,
+    Avx512,
     Avx2,
     Sse2,
     Scalar,
@@ -68,6 +71,7 @@ pub enum KernelChoice {
 pub fn kernel_choice() -> KernelChoice {
     static CHOICE: OnceLock<KernelChoice> = OnceLock::new();
     *CHOICE.get_or_init(|| match std::env::var("SABERTOOTH_SIMD").as_deref() {
+        Ok("avx512") => KernelChoice::Avx512,
         Ok("avx2") => KernelChoice::Avx2,
         Ok("sse2") => KernelChoice::Sse2,
         Ok("scalar") => KernelChoice::Scalar,
@@ -79,6 +83,13 @@ pub fn kernel_choice() -> KernelChoice {
 pub fn kernel_name(choice: KernelChoice) -> &'static str {
     let u8s = if u8_enabled() { " (+u8 first pass)" } else { "" };
     match resolve(choice) {
+        Kernel::Avx512I16 | Kernel::Avx512U8 => {
+            if u8_enabled() {
+                "avx512bw-i16x32 (+u8x64 first pass)"
+            } else {
+                "avx512bw-i16x32"
+            }
+        }
         Kernel::Avx2I16 | Kernel::Avx2U8 => if u8_enabled() { "avx2-i16x16 (+u8x32 first pass)" } else { "avx2-i16x16" },
         Kernel::Sse2I16 | Kernel::Sse2U8 => if u8s.is_empty() { "sse2-i16x8" } else { "sse2-i16x8 (+u8x16 first pass)" },
         Kernel::Scalar => "scalar",
@@ -89,10 +100,14 @@ fn resolve(choice: KernelChoice) -> Kernel {
     #[cfg(target_arch = "x86_64")]
     {
         let avx2 = std::is_x86_feature_detected!("avx2");
+        let avx512 = std::is_x86_feature_detected!("avx512bw");
         match choice {
             KernelChoice::Scalar => Kernel::Scalar,
             KernelChoice::Sse2 => Kernel::Sse2I16,
-            KernelChoice::Avx2 | KernelChoice::Auto => {
+            // AVX-512 only on request: on the benchmark machine (Cascade Lake)
+            // the 64-lane striped kernels were 15-50% slower per cell than AVX2
+            KernelChoice::Avx512 if avx512 => Kernel::Avx512I16,
+            KernelChoice::Avx512 | KernelChoice::Avx2 | KernelChoice::Auto => {
                 if avx2 {
                     Kernel::Avx2I16
                 } else {
@@ -171,6 +186,10 @@ impl QueryProfile {
         #[cfg(target_arch = "x86_64")]
         {
             let (striped, striped8) = match kernel {
+                Kernel::Avx512I16 | Kernel::Avx512U8 => (
+                    x86::Striped::build(&col_scores, m, 32),
+                    if use_u8 { x86::StripedU8::build(&col_scores, m, 64) } else { None },
+                ),
                 Kernel::Avx2I16 | Kernel::Avx2U8 => (
                     x86::Striped::build(&col_scores, m, 16),
                     if use_u8 { x86::StripedU8::build(&col_scores, m, 32) } else { None },
@@ -241,16 +260,15 @@ impl QueryProfile {
                 // feature detection; SSE2 is part of the x86-64 baseline.
                 if let Some(s8) = &self.striped8 {
                     if gaps.open <= u8::MAX as i32 {
-                        let avx2 = self.kernel == Kernel::Avx2I16;
-                        let r = unsafe {
-                            if avx2 {
-                                s8.score_avx2(target, gaps, &mut s.x86)
-                            } else {
-                                s8.score_sse2(target, gaps, &mut s.x86)
+                        let (r, k) = unsafe {
+                            match self.kernel {
+                                Kernel::Avx512I16 => (s8.score_avx512(target, gaps, &mut s.x86), Kernel::Avx512U8),
+                                Kernel::Avx2I16 => (s8.score_avx2(target, gaps, &mut s.x86), Kernel::Avx2U8),
+                                _ => (s8.score_sse2(target, gaps, &mut s.x86), Kernel::Sse2U8),
                             }
                         };
                         if let Some(score) = r {
-                            return (score, if avx2 { Kernel::Avx2U8 } else { Kernel::Sse2U8 });
+                            return (score, k);
                         }
                         // u8 headroom exceeded → i16
                     }
@@ -258,6 +276,7 @@ impl QueryProfile {
                 if let Some(st) = &self.striped {
                     let r = unsafe {
                         match self.kernel {
+                            Kernel::Avx512I16 => st.score_avx512(target, gaps, &mut s.x86),
                             Kernel::Avx2I16 => st.score_avx2(target, gaps, &mut s.x86),
                             _ => st.score_sse2(target, gaps, &mut s.x86),
                         }
@@ -290,6 +309,7 @@ impl QueryProfile {
                     // SAFETY: as in `sw_score_with`.
                     let r = unsafe {
                         match self.kernel {
+                            Kernel::Avx512I16 => st.score_end_avx512(target, gaps, self.m, &mut s.x86),
                             Kernel::Avx2I16 => st.score_end_avx2(target, gaps, self.m, &mut s.x86),
                             _ => st.score_end_sse2(target, gaps, self.m, &mut s.x86),
                         }
@@ -386,6 +406,10 @@ mod x86 {
         h_load_y: Vec<__m256i>,
         e_arr_y: Vec<__m256i>,
         best_col_y: Vec<__m256i>,
+        h_store_z: Vec<__m512i>,
+        h_load_z: Vec<__m512i>,
+        e_arr_z: Vec<__m512i>,
+        best_col_z: Vec<__m512i>,
     }
 
     /// Biased `u8` striped profile (`score + bias`, all ≥ 0) for the first
@@ -551,13 +575,13 @@ mod x86 {
                                 *eap.add(i) = $max(*eap.add(i), v_h_open);
                                 v_f = $subs(v_f, v_extend);
                                 // stop when F ≤ H − open in every lane (unsigned)
-                                if $movemask($cmpeq($subs(v_f, v_h_open), v_zero)) as u32 == $full {
+                                if $movemask($cmpeq($subs(v_f, v_h_open), v_zero)) == $full {
                                     break 'lazy;
                                 }
                             }
                         }
                         // headroom exceeded: later cells may have saturated
-                        if $movemask($cmpeq($subs(v_max, v_limit), v_zero)) as u32 != $full {
+                        if $movemask($cmpeq($subs(v_max, v_limit), v_zero)) != $full {
                             return None;
                         }
                     }
@@ -567,16 +591,121 @@ mod x86 {
         };
     }
 
+    #[inline]
+    #[target_feature(enable = "sse2")]
+    unsafe fn movemask_u64_sse2(v: __m128i) -> u64 {
+        _mm_movemask_epi8(v) as u32 as u64
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    unsafe fn movemask_u64_avx2(v: __m256i) -> u64 {
+        _mm256_movemask_epi8(v) as u32 as u64
+    }
+
+    // ---- AVX-512BW adapters (masks instead of movemask) --------------------
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn setzero_z() -> __m512i {
+        _mm512_setzero_si512()
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn cmpeq_u8_z(a: __m512i, b: __m512i) -> u64 {
+        _mm512_cmpeq_epi8_mask(a, b)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn cmpeq_i16_z(a: __m512i, b: __m512i) -> u64 {
+        _mm512_cmpeq_epi16_mask(a, b) as u64
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn cmpgt_i16_z(a: __m512i, b: __m512i) -> u64 {
+        _mm512_cmpgt_epi16_mask(a, b) as u64
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn mask_id(m: u64) -> u64 {
+        m
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn loadu_z(p: *const __m512i) -> __m512i {
+        _mm512_loadu_si512(p as *const _)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn storeu_z(p: *mut __m512i, v: __m512i) {
+        _mm512_storeu_si512(p as *mut _, v)
+    }
+
+    /// `[0, v0, v1, v2]` in 128-bit blocks (the block below each block).
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn blocks_up_z(v: __m512i) -> __m512i {
+        _mm512_maskz_shuffle_i32x4::<0x90>(0xFFF0, v, v)
+    }
+
+    /// Shift all 64 bytes up by one (byte 0 ← 0).
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn shl1_u8_z(v: __m512i) -> __m512i {
+        _mm512_alignr_epi8::<15>(v, blocks_up_z(v))
+    }
+
+    /// Shift all 32 `i16` lanes up by one (lane 0 ← 0).
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn shl1_i16_z(v: __m512i) -> __m512i {
+        _mm512_alignr_epi8::<14>(v, blocks_up_z(v))
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn hmax_u8_z(v: __m512i) -> u8 {
+        let lo = _mm512_castsi512_si256(v);
+        let hi = _mm512_extracti64x4_epi64::<1>(v);
+        hmax_u8_avx2(_mm256_max_epu8(lo, hi))
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn hmax_i16_z(v: __m512i) -> i16 {
+        let lo = _mm512_castsi512_si256(v);
+        let hi = _mm512_extracti64x4_epi64::<1>(v);
+        hmax_avx2(_mm256_max_epi16(lo, hi))
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512bw")]
+    unsafe fn lane0_min_z() -> __m512i {
+        _mm512_maskz_mov_epi16(1, _mm512_set1_epi16(i16::MIN))
+    }
+
     striped_u8_kernel!(
-        "sse2", __m128i, 16, 0xFFFFu32, score_sse2, [h_store, h_load, e_arr],
+        "sse2", __m128i, 16, 0xFFFFu64, score_sse2, [h_store, h_load, e_arr],
         _mm_setzero_si128, _mm_set1_epi8, _mm_adds_epu8, _mm_subs_epu8, _mm_max_epu8, _mm_cmpeq_epi8,
-        _mm_movemask_epi8, _mm_load_si128, shl1_u8_sse2, hmax_u8_sse2
+        movemask_u64_sse2, _mm_load_si128, shl1_u8_sse2, hmax_u8_sse2
     );
 
     striped_u8_kernel!(
-        "avx2", __m256i, 32, 0xFFFF_FFFFu32, score_avx2, [h_store_y, h_load_y, e_arr_y],
+        "avx2", __m256i, 32, 0xFFFF_FFFFu64, score_avx2, [h_store_y, h_load_y, e_arr_y],
         _mm256_setzero_si256, _mm256_set1_epi8, _mm256_adds_epu8, _mm256_subs_epu8, _mm256_max_epu8, _mm256_cmpeq_epi8,
-        _mm256_movemask_epi8, _mm256_load_si256, shl1_u8_avx2, hmax_u8_avx2
+        movemask_u64_avx2, _mm256_load_si256, shl1_u8_avx2, hmax_u8_avx2
+    );
+
+    striped_u8_kernel!(
+        "avx512bw", __m512i, 64, u64::MAX, score_avx512, [h_store_z, h_load_z, e_arr_z],
+        setzero_z, _mm512_set1_epi8, _mm512_adds_epu8, _mm512_subs_epu8, _mm512_max_epu8, cmpeq_u8_z,
+        mask_id, loadu_z, shl1_u8_z, hmax_u8_z
     );
 
     /// Striped `i16` query profile (Farrar layout) for `lanes` = 8 (SSE2) or
@@ -888,6 +1017,14 @@ mod x86 {
         _mm256_cmpgt_epi16, _mm256_cmpeq_epi16, _mm256_movemask_epi8, _mm256_load_si256, _mm256_storeu_si256,
         shl1_avx2, hmax_avx2, _mm256_or_si256, lane0_min_avx2
     );
+
+    striped_kernels!(
+        "avx512bw", __m512i, 32, score_avx512, score_end_avx512,
+        [h_store_z, h_load_z, e_arr_z, best_col_z],
+        setzero_z, _mm512_set1_epi16, _mm512_adds_epi16, _mm512_subs_epi16, _mm512_max_epi16,
+        cmpgt_i16_z, cmpeq_i16_z, mask_id, loadu_z, storeu_z,
+        shl1_i16_z, hmax_i16_z, _mm512_or_si512, lane0_min_z
+    );
 }
 
 #[cfg(test)]
@@ -917,7 +1054,7 @@ mod tests {
         (0..len).map(|_| rng.range(alpha) as u8).collect()
     }
 
-    const CHOICES: [KernelChoice; 3] = [KernelChoice::Avx2, KernelChoice::Sse2, KernelChoice::Scalar];
+    const CHOICES: [KernelChoice; 4] = [KernelChoice::Avx512, KernelChoice::Avx2, KernelChoice::Sse2, KernelChoice::Scalar];
 
     /// the same rows prepared for every kernel family
     fn all_kernels(rows: &[[i32; NPROF]]) -> Vec<QueryProfile> {
@@ -972,11 +1109,13 @@ mod tests {
         let k: Vec<Kernel> = all_kernels(&rows).iter().map(|q| q.kernel()).collect();
         #[cfg(target_arch = "x86_64")]
         {
-            if std::is_x86_feature_detected!("avx2") {
-                assert_eq!(k, vec![Kernel::Avx2I16, Kernel::Sse2I16, Kernel::Scalar]);
-            } else {
-                assert_eq!(k, vec![Kernel::Sse2I16, Kernel::Sse2I16, Kernel::Scalar]);
-            }
+            let avx2 = std::is_x86_feature_detected!("avx2");
+            let avx512 = std::is_x86_feature_detected!("avx512bw");
+            let best2 = if avx2 { Kernel::Avx2I16 } else { Kernel::Sse2I16 };
+            let best = if avx512 { Kernel::Avx512I16 } else { best2 };
+            assert_eq!(k, vec![best, best2, Kernel::Sse2I16, Kernel::Scalar]);
+            // the default is AVX2 (AVX-512 only on request)
+            assert_eq!(QueryProfile::from_rows_with(rows.clone(), KernelChoice::Auto).kernel(), best2);
         }
         let _ = k;
     }
@@ -1240,7 +1379,12 @@ mod microbench {
             let cells: usize = targets.iter().map(|t| t.len() * ql).sum();
             let rows = QueryProfile::build(&SeqScorer { query: &q, mat: &m }).rows().to_vec();
             let mut line = format!("m={:5}:", ql);
-            for (choice, u8p) in [(KernelChoice::Sse2, false), (KernelChoice::Avx2, false), (KernelChoice::Sse2, true), (KernelChoice::Avx2, true)] {
+            for (choice, u8p) in [
+                (KernelChoice::Avx2, false),
+                (KernelChoice::Avx512, false),
+                (KernelChoice::Avx2, true),
+                (KernelChoice::Avx512, true),
+            ] {
                 let qp = QueryProfile::from_rows_opts(rows.clone(), choice, u8p);
                 let mut s = SimdScratch::new();
                 let mut best = f64::MAX;

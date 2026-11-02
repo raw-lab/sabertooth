@@ -1,0 +1,206 @@
+{
+ "run": "mm_s5.7",
+ "tool": "mmseqs",
+ "version": "MMseqs2 8cc5ce367b5638c4306c2d7cfc652dd099a4643f",
+ "workload": "null_db",
+ "database": "null",
+ "args": [
+  "-s",
+  "5.7"
+ ],
+ "options": {},
+ "command": [
+  "/home/claude/tools/mmseqs/bin/mmseqs",
+  "easy-search",
+  "/home/claude/bench_data/ds_scale/q_eval.fa",
+  "/home/claude/suites/v0.4/null/dbs/mm_null",
+  "/home/claude/suites/v0.4/null/mm_s5.7__null_db.m8",
+  "/home/claude/suites/v0.4/null/tmp_mm_s5.7__null_db",
+  "-e",
+  "10",
+  "--max-seqs",
+  "4000",
+  "--threads",
+  "2",
+  "-v",
+  "1",
+  "-s",
+  "5.7"
+ ],
+ "threads": 2,
+ "measure": {
+  "label": "mm_s5.7__null_db",
+  "cmd": [
+   "/home/claude/tools/mmseqs/bin/mmseqs",
+   "easy-search",
+   "/home/claude/bench_data/ds_scale/q_eval.fa",
+   "/home/claude/suites/v0.4/null/dbs/mm_null",
+   "/home/claude/suites/v0.4/null/mm_s5.7__null_db.m8",
+   "/home/claude/suites/v0.4/null/tmp_mm_s5.7__null_db",
+   "-e",
+   "10",
+   "--max-seqs",
+   "4000",
+   "--threads",
+   "2",
+   "-v",
+   "1",
+   "-s",
+   "5.7"
+  ],
+  "repeat": 1,
+  "warmup_wall_s": [],
+  "wall_s": {
+   "min": 5.9484263049998845,
+   "median": 5.9484263049998845,
+   "max": 5.9484263049998845,
+   "stdev": 0.0
+  },
+  "peak_rss_bytes": {
+   "min": 928645120,
+   "median": 928645120,
+   "max": 928645120
+  },
+  "runs": [
+   {
+    "wall_s": 5.9484263049998845,
+    "exit": 0,
+    "peak_rss_bytes": 928645120,
+    "user_s": 11.671865,
+    "sys_s": 0.040171,
+    "minor_faults": 5278,
+    "major_faults": 0,
+    "stderr_tail": "",
+    "rep": 0
+   }
+  ]
+ },
+ "db_build": {
+  "tool": "mmseqs",
+  "db": "null",
+  "createdb": {
+   "label": "createdb",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createdb",
+    "/home/claude/bench_data/ds_scale/db_null.fa",
+    "/home/claude/suites/v0.4/null/dbs/mm_null",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "warmup_wall_s": [],
+   "wall_s": {
+    "min": 0.05906468299872358,
+    "median": 0.05906468299872358,
+    "max": 0.05906468299872358,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 11603968,
+    "median": 11603968,
+    "max": 11603968
+   },
+   "runs": [
+    {
+     "wall_s": 0.05906468299872358,
+     "exit": 0,
+     "peak_rss_bytes": 11603968,
+     "user_s": 0.043438,
+     "sys_s": 0.023693,
+     "minor_faults": 1669,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "createindex": {
+   "label": "createindex",
+   "cmd": [
+    "/home/claude/tools/mmseqs/bin/mmseqs",
+    "createindex",
+    "/home/claude/suites/v0.4/null/dbs/mm_null",
+    "/home/claude/suites/v0.4/null/dbs/mm_tmp_null",
+    "--threads",
+    "2",
+    "-v",
+    "1"
+   ],
+   "repeat": 1,
+   "warmup_wall_s": [],
+   "wall_s": {
+    "min": 3.5544651170021098,
+    "median": 3.5544651170021098,
+    "max": 3.5544651170021098,
+    "stdev": 0.0
+   },
+   "peak_rss_bytes": {
+    "min": 932024320,
+    "median": 932024320,
+    "max": 932024320
+   },
+   "runs": [
+    {
+     "wall_s": 3.5544651170021098,
+     "exit": 0,
+     "peak_rss_bytes": 932024320,
+     "user_s": 4.333675,
+     "sys_s": 1.211917,
+     "minor_faults": 321708,
+     "major_faults": 0,
+     "stderr_tail": "",
+     "rep": 0
+    }
+   ]
+  },
+  "db_bytes": 924986228
+ },
+ "null": {
+  "queries": 4000,
+  "thresholds": [
+   {
+    "evalue": 0.0001,
+    "hits": 0,
+    "per_query": 0.0,
+    "expected_per_query": 0.0001,
+    "observed_over_expected": 0.0
+   },
+   {
+    "evalue": 0.001,
+    "hits": 3,
+    "per_query": 0.00075,
+    "expected_per_query": 0.001,
+    "observed_over_expected": 0.75
+   },
+   {
+    "evalue": 0.01,
+    "hits": 5,
+    "per_query": 0.00125,
+    "expected_per_query": 0.01,
+    "observed_over_expected": 0.125
+   },
+   {
+    "evalue": 0.1,
+    "hits": 35,
+    "per_query": 0.00875,
+    "expected_per_query": 0.1,
+    "observed_over_expected": 0.08750000000000001
+   },
+   {
+    "evalue": 1.0,
+    "hits": 285,
+    "per_query": 0.07125,
+    "expected_per_query": 1.0,
+    "observed_over_expected": 0.07125
+   },
+   {
+    "evalue": 10.0,
+    "hits": 1739,
+    "per_query": 0.43475,
+    "expected_per_query": 10.0,
+    "observed_over_expected": 0.043475
+   }
+  ]
+ }
+}

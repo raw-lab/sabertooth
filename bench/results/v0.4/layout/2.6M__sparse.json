@@ -1,0 +1,64 @@
+{
+ "name": "2.6M",
+ "layout": "sparse",
+ "fasta": "/home/claude/bench_data/ds_scale/scope40.fa",
+ "fasta_sha256": "4d8f4835a2db146766f9b4dbad42b97ad8004599464b5ebeafe9e5eabe096ed6",
+ "index_bytes": 32878872,
+ "indexinfo": "index          : /home/claude/layout_work/2.6M_sparse/db.stidx\nformat version : 2\nbuilt by       : sabertooth 0.4.0 (unix time 1792465706)\nseed pattern   : 111001101 (k = 6)\nseed masking   : SEG-like w=12 2.2/2.5\nsequences      : 14323\nresidues       : 2611087 (85968 masked for seeding)\nlongest        : 1664\npostings       : 2374539 (4 bytes each)\ndistinct k-mers: 2234478\nk-mer lookup   : sparse (bucket tables + one entry per distinct k-mer)\nfile size      : 31.4 MiB\nsource         : /home/claude/layout_work/2.6M_sparse/db (MMseqs2 database)\nfreshness      : up to date with source\n",
+ "build": {
+  "wall_s": 0.3475088790000882,
+  "peak_rss_bytes": 66084864,
+  "user_s": 0.334123,
+  "sys_s": 0.099143,
+  "major_faults": 0,
+  "stderr_tail": "createindex: 14323 sequences, 2611087 residues -> /home/claude/layout_work/2.6M_sparse/db.stidx (2374539 postings of 4 bytes, 2234478 distinct 6-mers, sparse lookup, 85968 masked residues, 1 partition(s), 31.4 MiB) in 344.33ms; peak RSS 63.0 MiB\n"
+ },
+ "command": [
+  "/home/claude/bin/sabertooth-0.4.0",
+  "search",
+  "/home/claude/bench_data/ds_scale/q_tune.fa",
+  "/home/claude/layout_work/2.6M_sparse/db",
+  "--threads",
+  "2",
+  "--evalue",
+  "10",
+  "--max-hits",
+  "4000",
+  "--out",
+  "/home/claude/layout_work/2.6M_sparse/hits.m8",
+  "--require-index"
+ ],
+ "runs": [
+  {
+   "wall_s": 1.911973757999931,
+   "peak_rss_bytes": 55721984,
+   "user_s": 3.665889,
+   "sys_s": 0.028006999999999997,
+   "major_faults": 0,
+   "stderr_tail": "search: 1000 queries x 14323 targets, 12103 hits in 1.90s\n"
+  },
+  {
+   "wall_s": 2.020997626000053,
+   "peak_rss_bytes": 55926784,
+   "user_s": 3.826676,
+   "sys_s": 0.011757,
+   "major_faults": 0,
+   "stderr_tail": "search: 1000 queries x 14323 targets, 12103 hits in 2.01s\n"
+  },
+  {
+   "wall_s": 2.1625057240000842,
+   "peak_rss_bytes": 55873536,
+   "user_s": 3.886131,
+   "sys_s": 0.017748,
+   "major_faults": 0,
+   "stderr_tail": "search: 1000 queries x 14323 targets, 12103 hits in 2.16s\n"
+  }
+ ],
+ "wall_s": {
+  "median": 2.020997626000053,
+  "min": 1.911973757999931,
+  "max": 2.1625057240000842
+ },
+ "peak_rss_bytes_median": 55873536,
+ "hits_sha256": "00960294f80c1c87a4a67324718fb20e7a92518f5b5369e8f35bada7550224fe"
+}

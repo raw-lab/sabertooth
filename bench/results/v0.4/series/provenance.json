@@ -1,0 +1,59 @@
+{
+ "binaries": {
+  "st": {
+   "path": "/home/claude/bin/sabertooth-0.4.0",
+   "sha256": "48c9d9d45bd5a5269d7eb5ec41e164bf07a6d7a0c194d78654b56bdb4a86ecd9",
+   "version": "Sabertooth v0.4.0"
+  },
+  "st03": {
+   "path": "/home/claude/bin/sabertooth-0.3.0",
+   "sha256": "549806e86771203e26f00d7c79db5502e137e2b460ec055c2200db504622f6a4",
+   "version": "Sabertooth v0.3.0"
+  },
+  "mm": {
+   "path": "/home/claude/tools/mmseqs/bin/mmseqs",
+   "sha256": "b7ef6e0e33df5dd4fa9cf988cbd8b4988c11a3a1255d2c377f13e1bb40c157fb",
+   "version": "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
+  },
+  "dm": {
+   "path": "/home/claude/tools/diamond",
+   "sha256": "d3d72578fa97e87cc0846a06d2f9d7dc481a2106265f9546bc91512972fcd1f1",
+   "version": "diamond version 2.2.8"
+  }
+ },
+ "queries": {
+  "fasta": "/home/claude/bench_data/series/q_eval1k.fa",
+  "sha256": "e153440d7e4582743e8a1d7c605a2a259a3b8459a90f9a385c3bb2399013ff3c",
+  "labels": "/home/claude/bench_data/series/q_eval1k.labels.tsv",
+  "labels_sha256": "7284005c137c83f0e2acd12989504883713fe96dc9570aa6dcc8ed59a2aedaba"
+ },
+ "threads": 2,
+ "repeat": 3,
+ "warmup": 1,
+ "databases": {
+  "db_3": {
+   "fasta": "/home/claude/bench_data/ds_scale/scope40.fa",
+   "sha256": "4d8f4835a2db146766f9b4dbad42b97ad8004599464b5ebeafe9e5eabe096ed6"
+  },
+  "db_17": {
+   "fasta": "/home/claude/bench_data/series/series_17M.fa",
+   "sha256": "4b9f5fca502ace8a989561fa8581bdef061332af6240979644cfb1bdf6361623"
+  },
+  "db_34": {
+   "fasta": "/home/claude/bench_data/series/series_34M.fa",
+   "sha256": "d0f9e3d5b54d2a01f961a63d52f9d9cd3a03089ec3608a0078df8802f7c8a090"
+  },
+  "db_68": {
+   "fasta": "/home/claude/bench_data/series/series_68M.fa",
+   "sha256": "26d6cce6d07a9692b7dbef0effb1c5b951724986921336a8cc7201e36a2953e7"
+  },
+  "db_134": {
+   "fasta": "/home/claude/bench_data/series/series_134M.fa",
+   "sha256": "3b3eb1676f76a8c27880b91499c1eec88d0725865ccbd0115030181cd144c1a0"
+  },
+  "db_265": {
+   "fasta": "/home/claude/bench_data/series/series_265M.fa",
+   "sha256": "a99adf4c69650a21d3ceb3a489b4761fd2b9a5fa6ea56864c457171feb5b2d59"
+  }
+ }
+}
